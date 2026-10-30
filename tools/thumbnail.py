@@ -1,4 +1,4 @@
-"""Draws release/ShoppingList-thumbnail.png (1024x1024), same look as the Train Timer thumbnail.
+﻿"""Draws the 1024x1024 thumbnail options into release/options/, same look as the Train Timer thumbnail.
 
 Usage: python -I tools/thumbnail.py
 """
@@ -21,27 +21,98 @@ def p(v):
     return v * S
 
 
-def main():
+def hexagon(d, cx, cy, r, width, colour=ORANGE):
+    pts = [(cx + r * math.cos(math.radians(a)), cy + r * math.sin(math.radians(a))) for a in range(-90, 270, 60)]
+    d.line(pts + [pts[0], pts[1]], fill=colour, width=width, joint="curve")
+
+
+def cart(d, ox, oy, k, colour=CREAM, slots=True):
+    """Cart drawn in a 320x210 box whose top left is (ox, oy), scaled by k."""
+    q = lambda x, y: (ox + p(x * k), oy + p(y * k))
+    d.line([q(0, 0), q(40, 0), q(72, 140), q(274, 140)], fill=colour, width=int(p(22 * k)), joint="curve")
+    d.polygon([q(48, 28), q(320, 28), q(288, 114), q(66, 114)], fill=colour)
+    if slots:
+        for x in (114, 170, 226):
+            d.line([q(x, 44), q(x - 6, 100)], fill=BG, width=int(p(14 * k)))
+    for wx in (100, 252):
+        d.ellipse([q(wx - 24, 162), q(wx + 24, 210)], fill=colour)
+
+
+def tick(d, x, y, size, colour, width):
+    d.line([(x, y + size * 0.5), (x + size * 0.38, y + size * 0.88), (x + size, y)], fill=colour, width=width, joint="curve")
+
+
+def icon_hex_cart(d):
+    hexagon(d, p(512), p(420), p(250), p(26))
+    cart(d, p(352), p(338), 1)
+
+
+def icon_cart_tick(d):
+    cart(d, p(312), p(300), 1.25)
+    d.ellipse([p(600), p(190), p(760), p(350)], fill=ORANGE)
+    tick(d, p(640), p(238), p(80), BG, p(20))
+
+
+def icon_clipboard(d):
+    d.rounded_rectangle([p(352), p(190), p(672), p(620)], radius=p(28), outline=CREAM, width=p(22))
+    d.rounded_rectangle([p(436), p(164), p(588), p(222)], radius=p(16), fill=ORANGE)
+    for i, y in enumerate((p(300), p(390), p(480))):
+        if i < 2:
+            tick(d, p(400), y - p(20), p(44), ORANGE, p(14))
+        else:
+            d.rounded_rectangle([p(400), y - p(22), p(444), y + p(22)], radius=p(8), outline=ORANGE, width=p(10))
+        d.rounded_rectangle([p(468), y - p(9), p(620), y + p(9)], radius=p(9), fill=CREAM)
+
+
+def icon_bag(d):
+    hexagon(d, p(512), p(420), p(250), p(26))
+    d.arc([p(442), p(250), p(582), p(390)], 180, 360, fill=CREAM, width=p(22))
+    d.rounded_rectangle([p(392), p(320), p(632), p(560)], radius=p(26), fill=CREAM)
+    for hx in (p(452), p(572)):
+        d.ellipse([hx - p(12), p(352), hx + p(12), p(376)], fill=BG)
+    tick(d, p(458), p(420), p(108), ORANGE, p(22))
+
+
+def icon_crate_tag(d):
+    d.rounded_rectangle([p(332), p(310), p(642), p(600)], radius=p(16), outline=CREAM, width=p(22))
+    d.line([p(332), p(410), p(642), p(410)], fill=CREAM, width=p(18))
+    d.line([p(342), p(590), p(632), p(420)], fill=CREAM, width=p(18))
+    tag = Image.new("RGBA", (p(300), p(300)), (0, 0, 0, 0))
+    td = ImageDraw.Draw(tag)
+    td.polygon([(p(60), p(110)), (p(110), p(60)), (p(250), p(60)), (p(250), p(160)), (p(110), p(160))], fill=ORANGE)
+    td.ellipse([p(100), p(98), p(124), p(122)], fill=BG)
+    tag = tag.rotate(-30, resample=Image.BICUBIC)
+    return tag, (p(520), p(150))
+
+
+def icon_cart_list(d):
+    hexagon(d, p(512), p(420), p(250), p(26))
+    cart(d, p(372), p(398), 0.85, slots=False)
+    for i, y in enumerate((p(270), p(318))):
+        d.rounded_rectangle([p(430), y - p(9), p(600 - i * 50), y + p(9)], radius=p(9), fill=ORANGE)
+
+
+OPTIONS = {
+    "A-hex-cart": icon_hex_cart,
+    "B-cart-tick": icon_cart_tick,
+    "C-clipboard": icon_clipboard,
+    "D-bag-hex": icon_bag,
+    "E-crate-tag": icon_crate_tag,
+    "F-hex-cart-list": icon_cart_list,
+}
+
+
+def render(draw_icon, out):
     img = Image.new("RGB", (W, W), BG)
     d = ImageDraw.Draw(img)
+    extra = draw_icon(d)
+    if extra:
+        layer, pos = extra
+        img.paste(layer, pos, layer)
 
-    # the hideout's hexagon, pointy top like the area icons
-    cx, cy, r = p(512), p(420), p(250)
-    hexagon = [(cx + r * math.cos(math.radians(a)), cy + r * math.sin(math.radians(a))) for a in range(-90, 270, 60)]
-    d.line(hexagon + [hexagon[0], hexagon[1]], fill=ORANGE, width=p(26), joint="curve")
-
-    # shopping cart: handle, basket with slots, wheels
-    line = p(22)
-    d.line([(p(352), p(338)), (p(392), p(338)), (p(424), p(478)), (p(626), p(478))], fill=CREAM, width=line, joint="curve")
-    d.polygon([(p(400), p(366)), (p(672), p(366)), (p(640), p(452)), (p(418), p(452))], fill=CREAM)
-    for x in (p(466), p(522), p(578)):
-        d.line([(x, p(382)), (x - p(6), p(438))], fill=BG, width=p(14))
-    for wx in (p(452), p(604)):
-        d.ellipse([wx - p(24), p(500), wx + p(24), p(548)], fill=CREAM)
-
+    # title and subtitle are centred by their visible ink, since glyph boxes include side bearings
     def paste_centred(layer, y_top):
-        box = layer.getbbox()
-        piece = layer.crop(box)
+        piece = layer.crop(layer.getbbox())
         img.paste(piece, (int(W / 2 - piece.width / 2), int(y_top)), piece)
 
     def line_layer(parts, spacing):
@@ -55,10 +126,8 @@ def main():
             x += ld.textlength(ch, font=font) + spacing
         return layer
 
-    title_font = ImageFont.truetype(FONT_BOLD, p(150))
-    title_layer = line_layer([(ch, title_font, CREAM) for ch in "SHOPPING"], 0)
-    sub_font = ImageFont.truetype(FONT_SEMI, p(64))
-    sub_layer = line_layer([(ch, sub_font, ORANGE) for ch in "LIST"], p(64) * 0.9)
+    title_layer = line_layer([(ch, ImageFont.truetype(FONT_BOLD, p(150)), CREAM) for ch in "SHOPPING"], 0)
+    sub_layer = line_layer([(ch, ImageFont.truetype(FONT_SEMI, p(64)), ORANGE) for ch in "LIST"], p(64) * 0.9)
 
     # one gap between icon, title and subtitle, chosen so the top and bottom margins match
     icon_box = ImageChops.difference(img, Image.new("RGB", img.size, BG)).getbbox()
@@ -68,11 +137,27 @@ def main():
     title_top = icon_box[3] + gap
     paste_centred(title_layer, title_top)
     paste_centred(sub_layer, title_top + title_h + gap)
+    img = img.resize((1024, 1024), Image.LANCZOS)
+    img.save(out, optimize=True)
+    return img
 
-    out = ROOT / "release" / "ShoppingList-thumbnail.png"
-    out.parent.mkdir(exist_ok=True)
-    img.resize((1024, 1024), Image.LANCZOS).save(out, optimize=True)
-    print(out)
+
+def main():
+    folder = ROOT / "release" / "options"
+    folder.mkdir(parents=True, exist_ok=True)
+    images = [(name, render(fn, folder / f"ShoppingList-thumbnail-{name}.png")) for name, fn in OPTIONS.items()]
+
+    # contact sheet to compare them side by side
+    cell = 340
+    sheet = Image.new("RGB", (cell * 3 + 40, (cell + 40) * 2 + 20), (30, 30, 30))
+    sd = ImageDraw.Draw(sheet)
+    label_font = ImageFont.truetype(FONT_SEMI, 22)
+    for i, (name, im) in enumerate(images):
+        x, y = 10 + (i % 3) * (cell + 10), 10 + (i // 3) * (cell + 40)
+        sheet.paste(im.resize((cell, cell), Image.LANCZOS), (x, y))
+        sd.text((x + 4, y + cell + 6), name, font=label_font, fill=CREAM)
+    sheet.save(folder / "options.png")
+    print(folder)
 
 
 if __name__ == "__main__":

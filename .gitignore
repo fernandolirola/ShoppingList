@@ -8,3 +8,4 @@ release/*.zip
 release/*.txt
 __pycache__/
 *.pyc
+release/options/
