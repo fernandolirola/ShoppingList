@@ -1,0 +1,10 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.suo
+release/*.zip
+release/*.txt
+__pycache__/
+*.pyc

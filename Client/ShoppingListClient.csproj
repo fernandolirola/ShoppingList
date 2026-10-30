@@ -1,0 +1,37 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <AssemblyName>zezinho.ShoppingList</AssemblyName>
+    <RootNamespace>ShoppingList.Client</RootNamespace>
+    <Version>1.0.0</Version>
+    <SPTPath Condition="'$(SPTPath)' == ''">C:\SPT</SPTPath>
+    <Managed>$(SPTPath)\EscapeFromTarkov_Data\Managed</Managed>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <Reference Include="BepInEx" HintPath="$(SPTPath)\BepInEx\core\BepInEx.dll" Private="false" />
+    <Reference Include="0Harmony" HintPath="$(SPTPath)\BepInEx\core\0Harmony.dll" Private="false" />
+    <Reference Include="spt-common" HintPath="$(SPTPath)\BepInEx\plugins\spt\spt-common.dll" Private="false" />
+    <Reference Include="spt-reflection" HintPath="$(SPTPath)\BepInEx\plugins\spt\spt-reflection.dll" Private="false" />
+    <Reference Include="Assembly-CSharp" HintPath="$(Managed)\Assembly-CSharp.dll" Private="false" />
+    <Reference Include="Sirenix.Serialization" HintPath="$(Managed)\Sirenix.Serialization.dll" Private="false" />
+    <Reference Include="Comfort" HintPath="$(Managed)\Comfort.dll" Private="false" />
+    <Reference Include="Comfort.Unity" HintPath="$(Managed)\Comfort.Unity.dll" Private="false" />
+    <Reference Include="Newtonsoft.Json" HintPath="$(Managed)\Newtonsoft.Json.dll" Private="false" />
+    <Reference Include="UnityEngine" HintPath="$(Managed)\UnityEngine.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(Managed)\UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="UnityEngine.IMGUIModule" HintPath="$(Managed)\UnityEngine.IMGUIModule.dll" Private="false" />
+    <Reference Include="UnityEngine.UI" HintPath="$(Managed)\UnityEngine.UI.dll" Private="false" />
+    <Reference Include="UnityEngine.UIModule" HintPath="$(Managed)\UnityEngine.UIModule.dll" Private="false" />
+    <Reference Include="UnityEngine.TextRenderingModule" HintPath="$(Managed)\UnityEngine.TextRenderingModule.dll" Private="false" />
+    <Reference Include="Unity.TextMeshPro" HintPath="$(Managed)\Unity.TextMeshPro.dll" Private="false" />
+    <Reference Include="UnityEngine.ImageConversionModule" HintPath="$(Managed)\UnityEngine.ImageConversionModule.dll" Private="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\cart.png" LogicalName="cart.png" />
+  </ItemGroup>
+</Project>
