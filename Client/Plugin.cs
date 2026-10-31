@@ -18,7 +18,7 @@ using UnityEngine;
 
 namespace ShoppingList.Client;
 
-[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.1.2")]
+[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.1.3")]
 public partial class Plugin : BaseUnityPlugin
 {
     internal static ManualLogSource Log = null!;
@@ -70,8 +70,12 @@ public partial class Plugin : BaseUnityPlugin
         if (Time.unscaledTime >= _nextLookup)
         {
             _nextLookup = Time.unscaledTime + 1f;
-            if (_areaScreen == null) _areaScreen = FindObjectOfType<AreaScreenSubstrate>(true);
-            if (_overlay == null) _overlay = FindObjectOfType<HideoutScreenOverlay>(true);
+            // Scene-wide searches stutter on big raid maps, and the hideout screens do not exist there
+            if (!InRaid)
+            {
+                if (_areaScreen == null) _areaScreen = FindObjectOfType<AreaScreenSubstrate>(true);
+                if (_overlay == null) _overlay = FindObjectOfType<HideoutScreenOverlay>(true);
+            }
         }
 
         if (!Active && _open)

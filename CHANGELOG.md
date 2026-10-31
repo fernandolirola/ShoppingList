@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.3
+
+- Fixed small stutters in raid on big maps: the plugin no longer searches the whole scene for hideout screens while you are in a raid.
+
 ## 1.1.2
 
 - Fixed the rouble and euro signs showing as garbled text (for example in Total cost), and the accent in a Portuguese message.
