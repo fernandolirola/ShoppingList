@@ -49,13 +49,6 @@ public sealed class Planner(
         var firPool = new Dictionary<MongoId, int>(firHave);
         var nonFirPool = anyHave.ToDictionary(kv => kv.Key, kv => kv.Value - firHave.GetValueOrDefault(kv.Key));
 
-        var carriedFir = ToPool(request.CarriedFir);
-        var carriedNonFir = ToPool(request.Carried);
-        foreach (var (tpl, count) in carriedFir)
-        {
-            carriedNonFir[tpl] = carriedNonFir.GetValueOrDefault(tpl) - count;
-        }
-
         var donations = hideoutInProgress.GetDonations(sessionId);
         var areaNeeds = new List<(AreaPlan plan, StageRequirement req, Need need)>();
         foreach (var (area, stage, level, ready) in SelectAreas(pmc, request.Areas))
@@ -85,10 +78,7 @@ public sealed class Planner(
         {
             var tpl = req.TemplateId;
             int stillNeeded = need.Required - need.Donated;
-            // Stash first, so "on you" only counts what the stash does not already cover
-            int fromStash = need.Fir ? Take(firPool, tpl, stillNeeded) : Take(nonFirPool, tpl, Take(firPool, tpl, stillNeeded));
-            int missing = need.Fir ? Take(carriedFir, tpl, fromStash) : Take(carriedNonFir, tpl, Take(carriedFir, tpl, fromStash));
-            need.Carried = fromStash - missing;
+            int missing = need.Fir ? Take(firPool, tpl, stillNeeded) : Take(nonFirPool, tpl, Take(firPool, tpl, stillNeeded));
             need.Missing = missing;
             need.Have = stillNeeded - missing;
             need.Rarity = Rarity(tpl);
@@ -115,10 +105,6 @@ public sealed class Planner(
                 firToCraft[tpl] = firToCraft.GetValueOrDefault(tpl) + missing;
             }
         }
-
-        // What is left on the player can still go into crafts
-        foreach (var (tpl, count) in carriedFir) firPool[tpl] = firPool.GetValueOrDefault(tpl) + count;
-        foreach (var (tpl, count) in carriedNonFir) nonFirPool[tpl] = nonFirPool.GetValueOrDefault(tpl) + count;
 
         var offers = new Dictionary<MongoId, List<Offer>>();
         List<Offer> OffersFor(MongoId tpl) => offers.TryGetValue(tpl, out var list) ? list : offers[tpl] = request.Raid ? [] : FindOffers(sessionId, pmc, tpl, response.FleaUnlocked);
@@ -249,9 +235,6 @@ public sealed class Planner(
 
         return _rarity[tpl] = rarity;
     }
-
-    private static Dictionary<MongoId, int> ToPool(Dictionary<string, int>? counts) =>
-        (counts ?? []).Where(kv => MongoId.IsValidMongoId(kv.Key) && kv.Value > 0).ToDictionary(kv => new MongoId(kv.Key), kv => kv.Value);
 
     private IEnumerable<(HideoutArea area, Stage stage, int level, bool ready)> SelectAreas(PmcData pmc, List<int>? wanted)
     {

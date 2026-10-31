@@ -11,9 +11,6 @@ public record PlanRequest : IRequestData
     [JsonPropertyName("future")] public bool Future { get; init; }
     // The overview also lists later levels of areas that are not ready yet
     [JsonPropertyName("overview")] public bool Overview { get; init; }
-    // Items on the player in raid, which the server profile does not have yet
-    [JsonPropertyName("carried")] public Dictionary<string, int>? Carried { get; init; }
-    [JsonPropertyName("carriedFir")] public Dictionary<string, int>? CarriedFir { get; init; }
     // Nothing can be bought in raid, so the offer search is skipped
     [JsonPropertyName("raid")] public bool Raid { get; init; }
 }
@@ -56,7 +53,6 @@ public record Need
     [JsonPropertyName("required")] public int Required { get; init; }
     [JsonPropertyName("have")] public int Have { get; set; }
     [JsonPropertyName("donated")] public int Donated { get; init; }
-    [JsonPropertyName("carried")] public int Carried { get; set; }
     // -1 unknown, 0 common, 1 rare, 2 super rare
     [JsonPropertyName("rarity")] public int Rarity { get; set; } = -1;
     [JsonPropertyName("missing")] public int Missing { get; set; }

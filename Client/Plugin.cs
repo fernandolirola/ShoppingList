@@ -55,7 +55,8 @@ public partial class Plugin : BaseUnityPlugin
         Log = Logger;
         _portuguese = Config.Bind("General", "Portuguese", false, "Show the panel in Portuguese");
         _crafts = Config.Bind("General", "Buy craft ingredients", true, "For found-in-raid items with an unlocked craft, buy that craft's ingredients");
-        _hotkey = Config.Bind("General", "Hotkey", new KeyboardShortcut(KeyCode.L, KeyCode.LeftControl), "Opens the shopping list in the hideout, or in raid while the inventory is open");
+        // New key name so existing configs drop Ctrl+L, which inspects the weapon in raid
+        _hotkey = Config.Bind("General", "Open key", new KeyboardShortcut(KeyCode.RightBracket), "Opens the shopping list in the hideout, or in raid while the inventory is open");
         _future = Config.Bind("General", "Show future upgrades", false, "Also list the levels after the next one");
         _sort = Config.Bind("General", "Sort by", SortMode.Default, "How the areas in the list are sorted");
         new Harmony("com.zezinho.shoppinglist").PatchAll(typeof(ScrollPatch));
@@ -103,11 +104,23 @@ public partial class Plugin : BaseUnityPlugin
         // In raid only while the list is on screen, so a closed inventory costs nothing during fights
         if (_open && Shown && !_busy && Time.unscaledTime >= _nextSignature)
         {
-            _nextSignature = Time.unscaledTime + (InRaid ? 3f : 1.5f);
+            _nextSignature = Time.unscaledTime + 1.5f;
             long signature = StashSignature();
             if (_signatureKnown && signature != _signature)
             {
-                Refresh();
+                // In raid the stash cannot change, so only what you carry is recounted, without asking the server
+                if (InRaid)
+                {
+                    if (_stashPlan is not null)
+                    {
+                        _raw = WithCarried(_stashPlan);
+                        ApplySkips();
+                    }
+                }
+                else
+                {
+                    Refresh();
+                }
             }
 
             _signature = signature;
@@ -228,7 +241,8 @@ public partial class Plugin : BaseUnityPlugin
                 return;
             }
 
-            _raw = plan;
+            _stashPlan = InRaid ? plan : null;
+            _raw = InRaid ? WithCarried(plan) : plan;
             ApplySkips();
             if (_plan!.Error != null)
             {
@@ -286,25 +300,58 @@ public partial class Plugin : BaseUnityPlugin
             return new PlanResponse();
         }
 
-        Dictionary<string, int>? carried = null, carriedFir = null;
+        var body = JsonConvert.SerializeObject(new { areas, crafts = _crafts.Value, future = _future.Value, overview = _focusArea is null, raid = InRaid });
+        var json = await RequestHandler.PostJsonAsync("/shoppinglist/plan", body);
+        return JsonConvert.DeserializeObject<PlanResponse>(json) ?? new PlanResponse();
+    }
+
+    // The server plan from when the list opened in raid, counting the stash only
+    private PlanResponse? _stashPlan;
+
+    // Same order as the server: the stash is used first, then FIR needs take what you carry before the rest,
+    // and later levels only get what is left
+    private static PlanResponse WithCarried(PlanResponse stashPlan)
+    {
+        var fir = new Dictionary<string, int>();
+        var nonFir = new Dictionary<string, int>();
         if (RaidPlayer is { } player)
         {
-            carried = new Dictionary<string, int>();
-            carriedFir = new Dictionary<string, int>();
             foreach (var item in player.Inventory.Equipment.GetAllItems())
             {
+                var pool = item.SpawnedInSession ? fir : nonFir;
                 string tpl = item.TemplateId.ToString();
-                carried[tpl] = carried.TryGetValue(tpl, out var any) ? any + item.StackObjectsCount : item.StackObjectsCount;
-                if (item.SpawnedInSession)
-                {
-                    carriedFir[tpl] = carriedFir.TryGetValue(tpl, out var fir) ? fir + item.StackObjectsCount : item.StackObjectsCount;
-                }
+                pool[tpl] = (pool.TryGetValue(tpl, out var count) ? count : 0) + item.StackObjectsCount;
             }
         }
 
-        var body = JsonConvert.SerializeObject(new { areas, crafts = _crafts.Value, future = _future.Value, overview = _focusArea is null, carried, carriedFir, raid = carried != null });
-        var json = await RequestHandler.PostJsonAsync("/shoppinglist/plan", body);
-        return JsonConvert.DeserializeObject<PlanResponse>(json) ?? new PlanResponse();
+        static int Take(Dictionary<string, int> pool, string tpl, int count)
+        {
+            int have = pool.TryGetValue(tpl, out var c) ? c : 0;
+            int used = Math.Min(have, count);
+            pool[tpl] = have - used;
+            return count - used;
+        }
+
+        static Need Copy(Need n) => new() { Tpl = n.Tpl, Required = n.Required, Have = n.Have, Donated = n.Donated, Missing = n.Missing, Fir = n.Fir, Tool = n.Tool, Plan = n.Plan, Rarity = n.Rarity };
+        static AreaPlan CopyArea(AreaPlan a) => new() { Type = a.Type, Level = a.Level, Ready = a.Ready, Items = a.Items.Select(Copy).ToList() };
+
+        var areas = stashPlan.Areas.Select(CopyArea).ToList();
+        var future = stashPlan.Future.Select(CopyArea).ToList();
+        var needs = areas.SelectMany(a => a.Items).OrderByDescending(n => n.Fir).Concat(future.SelectMany(a => a.Items));
+        foreach (var need in needs.Where(n => n.Missing > 0 && !MoneyTpls.Contains(n.Tpl)))
+        {
+            int missing = need.Fir ? Take(fir, need.Tpl, need.Missing) : Take(nonFir, need.Tpl, Take(fir, need.Tpl, need.Missing));
+            need.Carried = need.Missing - missing;
+            need.Have += need.Carried;
+            need.Missing = missing;
+            if (missing == 0) need.Plan = "ok";
+        }
+
+        return new PlanResponse
+        {
+            Error = stashPlan.Error, Areas = areas, Future = future, Crafts = stashPlan.Crafts, Purchases = stashPlan.Purchases, Operations = stashPlan.Operations,
+            Unavailable = stashPlan.Unavailable, Cost = stashPlan.Cost, Money = stashPlan.Money, TotalRub = stashPlan.TotalRub, FleaUnlocked = stashPlan.FleaUnlocked,
+        };
     }
 
     private async void Buy()

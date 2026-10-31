@@ -2,7 +2,8 @@
 
 ## 1.1.1
 
-- Fixed lag in raid: the list only refreshes while it is on screen, ignores items it does not need (shooting no longer re-plans it) and skips the flea market search.
+- Fixed lag in raid: the list asks the server once when opened, then counts what you carry on the game side while it is on screen.
+- The list now opens with ] (Ctrl+L inspects the weapon in raid). The setting is now called "Open key", so it resets to ] once.
 
 ## 1.1.0
 
