@@ -9,6 +9,7 @@ public class PlanResponse
     [JsonProperty("error")] public string? Error;
     [JsonProperty("areas")] public List<AreaPlan> Areas = new();
     [JsonProperty("crafts")] public List<CraftPlan> Crafts = new();
+    [JsonProperty("future")] public List<AreaPlan> Future = new();
     [JsonProperty("purchases")] public List<Purchase> Purchases = new();
     [JsonProperty("unavailable")] public List<Need> Unavailable = new();
     [JsonProperty("cost")] public Dictionary<string, long> Cost = new();
@@ -41,6 +42,8 @@ public class Need
     [JsonProperty("required")] public int Required;
     [JsonProperty("have")] public int Have;
     [JsonProperty("donated")] public int Donated;
+    [JsonProperty("carried")] public int Carried;
+    [JsonProperty("rarity")] public int Rarity = -1;
     [JsonProperty("missing")] public int Missing;
     [JsonProperty("fir")] public bool Fir;
     [JsonProperty("tool")] public bool Tool;

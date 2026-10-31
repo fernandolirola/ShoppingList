@@ -14,6 +14,7 @@ using SPTarkov.Server.Core.Services.Commerce;
 using SPTarkov.Server.Core.Services.Ragfair;
 using SPTarkov.Server.Core.Helpers.Commerce;
 using SPTarkov.Server.Core.Helpers.Profile;
+using SPTarkov.Server.Core.Utils;
 
 namespace ShoppingList;
 
@@ -21,6 +22,8 @@ namespace ShoppingList;
 public sealed class Planner(
     ProfileHelper profileHelper,
     HideoutTable hideoutTable,
+    TemplateTable templateTable,
+    JsonUtil jsonUtil,
     TradersTable tradersTable,
     GlobalTable globalTable,
     TraderAssortHelper traderAssortHelper,
@@ -33,6 +36,8 @@ public sealed class Planner(
     HideoutInProgressReader hideoutInProgress,
     ISptLogger<Planner> logger)
 {
+    private readonly Dictionary<MongoId, int> _rarity = new();
+
     private sealed record Offer(string Source, MongoId Trader, MongoId Id, MongoId Currency, double UnitPrice, double UnitRub, int Available, bool Fir);
 
     public PlanResponse Plan(MongoId sessionId, PlanRequest request)
@@ -43,6 +48,13 @@ public sealed class Planner(
         var (firHave, anyHave) = CountStash(pmc);
         var firPool = new Dictionary<MongoId, int>(firHave);
         var nonFirPool = anyHave.ToDictionary(kv => kv.Key, kv => kv.Value - firHave.GetValueOrDefault(kv.Key));
+
+        var carriedFir = ToPool(request.CarriedFir);
+        var carriedNonFir = ToPool(request.Carried);
+        foreach (var (tpl, count) in carriedFir)
+        {
+            carriedNonFir[tpl] = carriedNonFir.GetValueOrDefault(tpl) - count;
+        }
 
         var donations = hideoutInProgress.GetDonations(sessionId);
         var areaNeeds = new List<(AreaPlan plan, StageRequirement req, Need need)>();
@@ -73,11 +85,13 @@ public sealed class Planner(
         {
             var tpl = req.TemplateId;
             int stillNeeded = need.Required - need.Donated;
-            int missing = need.Fir
-                ? Take(firPool, tpl, stillNeeded)
-                : Take(nonFirPool, tpl, Take(firPool, tpl, stillNeeded));
+            // Stash first, so "on you" only counts what the stash does not already cover
+            int fromStash = need.Fir ? Take(firPool, tpl, stillNeeded) : Take(nonFirPool, tpl, Take(firPool, tpl, stillNeeded));
+            int missing = need.Fir ? Take(carriedFir, tpl, fromStash) : Take(carriedNonFir, tpl, Take(carriedFir, tpl, fromStash));
+            need.Carried = fromStash - missing;
             need.Missing = missing;
             need.Have = stillNeeded - missing;
+            need.Rarity = Rarity(tpl);
             if (missing == 0)
             {
                 need.Plan = "ok";
@@ -102,6 +116,10 @@ public sealed class Planner(
             }
         }
 
+        // What is left on the player can still go into crafts
+        foreach (var (tpl, count) in carriedFir) firPool[tpl] = firPool.GetValueOrDefault(tpl) + count;
+        foreach (var (tpl, count) in carriedNonFir) nonFirPool[tpl] = nonFirPool.GetValueOrDefault(tpl) + count;
+
         var offers = new Dictionary<MongoId, List<Offer>>();
         List<Offer> OffersFor(MongoId tpl) => offers.TryGetValue(tpl, out var list) ? list : offers[tpl] = FindOffers(sessionId, pmc, tpl, response.FleaUnlocked);
 
@@ -125,6 +143,11 @@ public sealed class Planner(
             }
         }
 
+        if (request.Future)
+        {
+            PlanFuture(pmc, request, response, firPool, nonFirPool);
+        }
+
         BuildPurchases(response, toBuy, OffersFor, areaNeeds.Select(n => n.need).Concat(response.Crafts.SelectMany(c => c.Ingredients)));
         foreach (var money in Money.GetMoneyTpls())
         {
@@ -133,6 +156,102 @@ public sealed class Planner(
 
         return response;
     }
+
+    // Later levels only show what the stash covers after the current plan, nothing is bought for them
+    private void PlanFuture(PmcData pmc, PlanRequest request, PlanResponse response, Dictionary<MongoId, int> firPool, Dictionary<MongoId, int> nonFirPool)
+    {
+        var current = response.Areas.ToDictionary(a => a.Type, a => a.Level);
+        var levels = new List<(HideoutArea area, int level)>();
+        foreach (var area in hideoutTable.Areas)
+        {
+            if (area.Type is null || area.IsEnabled == false || area.Stages is null)
+            {
+                continue;
+            }
+
+            int type = (int)area.Type.Value;
+            var profileArea = pmc.Hideout?.Areas?.FirstOrDefault(a => a.Type == area.Type);
+            bool constructing = profileArea?.Constructing == true;
+            int built = (profileArea?.Level ?? 0) + (constructing ? 1 : 0);
+            bool wanted = request.Areas?.Contains(type) == true;
+            int from;
+            if (current.TryGetValue(type, out var next))
+            {
+                from = next + 1;
+            }
+            else if (constructing ? request.Overview || wanted : request.Overview && !wanted && !IsReady(pmc, area, built + 1))
+            {
+                // Unticked areas stay out; the overview adds areas still locked behind other upgrades
+                from = built + 1;
+            }
+            else
+            {
+                continue;
+            }
+
+            for (int level = from; area.Stages.ContainsKey(level.ToString()); level++)
+            {
+                levels.Add((area, level));
+            }
+        }
+
+        foreach (var (area, level) in levels.OrderBy(l => l.level))
+        {
+            var plan = new AreaPlan { Type = (int)area.Type!.Value, Level = level };
+            foreach (var req in (area.Stages![level.ToString()].Requirements ?? []).Where(r => r.Type == "Item"))
+            {
+                var tpl = req.TemplateId;
+                var need = new Need { Tpl = tpl.ToString(), Required = req.Count ?? 0, Fir = req.IsSpawnedInSession == true, Rarity = Rarity(tpl) };
+                need.Missing = need.Fir ? Take(firPool, tpl, need.Required) : Take(nonFirPool, tpl, Take(firPool, tpl, need.Required));
+                need.Have = need.Required - need.Missing;
+                need.Plan = need.Missing == 0 ? "ok" : paymentHelper.IsMoneyTpl(tpl) ? "money" : need.Fir ? "none" : "later";
+                plan.Items.Add(need);
+            }
+
+            response.Future.Add(plan);
+        }
+
+        response.Future.Sort((a, b) => a.Type != b.Type ? a.Type.CompareTo(b.Type) : a.Level.CompareTo(b.Level));
+    }
+
+    private static bool IsReady(PmcData pmc, HideoutArea area, int level) =>
+        area.Stages?.GetValueOrDefault(level.ToString()) is { } stage && (stage.Requirements ?? []).All(r => r.Type switch
+        {
+            "Area" => (pmc.Hideout?.Areas?.FirstOrDefault(a => (int)a.Type == r.AreaType)?.Level ?? 0) >= (r.RequiredLevel ?? 0),
+            "TraderLoyalty" => (pmc.TradersInfo?.GetValueOrDefault(r.TraderId)?.LoyaltyLevel ?? 0) >= (r.LoyaltyLevel ?? 0),
+            _ => true,
+        });
+
+    // RarityPvE has no typed property, so it is read back from the serialized props
+    private int Rarity(MongoId tpl)
+    {
+        if (_rarity.TryGetValue(tpl, out var known))
+        {
+            return known;
+        }
+
+        int rarity = -1;
+        try
+        {
+            if (templateTable.Items.GetValueOrDefault(tpl)?.Properties is { } props)
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(jsonUtil.Serialize(props, props.GetType())!);
+                if (doc.RootElement.TryGetProperty("RarityPvE", out var value) && value.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    rarity = value.GetString() switch { "Common" => 0, "Rare" => 1, "Superrare" => 2, _ => -1 };
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.Warning($"[ShoppingList] No rarity for {tpl}: {ex.Message}");
+        }
+
+        return _rarity[tpl] = rarity;
+    }
+
+    private static Dictionary<MongoId, int> ToPool(Dictionary<string, int>? counts) =>
+        (counts ?? []).Where(kv => MongoId.IsValidMongoId(kv.Key) && kv.Value > 0).ToDictionary(kv => new MongoId(kv.Key), kv => kv.Value);
 
     private IEnumerable<(HideoutArea area, Stage stage, int level, bool ready)> SelectAreas(PmcData pmc, List<int>? wanted)
     {
@@ -150,12 +269,7 @@ public sealed class Planner(
                 continue;
             }
 
-            bool ready = (stage.Requirements ?? []).All(r => r.Type switch
-            {
-                "Area" => (pmc.Hideout?.Areas?.FirstOrDefault(a => (int)a.Type == r.AreaType)?.Level ?? 0) >= (r.RequiredLevel ?? 0),
-                "TraderLoyalty" => (pmc.TradersInfo?.GetValueOrDefault(r.TraderId)?.LoyaltyLevel ?? 0) >= (r.LoyaltyLevel ?? 0),
-                _ => true,
-            });
+            bool ready = IsReady(pmc, area, next);
 
             bool selected = wanted is { Count: > 0 } ? wanted.Contains((int)area.Type.Value) : ready;
             if (selected)

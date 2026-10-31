@@ -38,6 +38,8 @@ public partial class Plugin
             }
 
             top += 32;
+            DrawOptions(top);
+            top += 32;
         }
 
         float footer = _confirming ? 112 : 96;
@@ -73,7 +75,7 @@ public partial class Plugin
             GUI.Label(new Rect(Mathf.Min(mouse.x + 14, W - width - 4), mouse.y + 18, width, height), _tooltip, ui.Tooltip);
         }
 
-        GUI.DragWindow(new Rect(0, 0, W - 140, 70));
+        GUI.DragWindow(new Rect(0, 0, W - 270, 70));
     }
 
     private void DrawHeader()
@@ -86,8 +88,18 @@ public partial class Plugin
             var titleWidth = ui.Title.CalcSize(new GUIContent(T("SHOPPING LIST", "LISTA DE COMPRAS"))).x;
             GUI.Label(new Rect(Pad + titleWidth + 12, 36, 300, 26), "/  " + ((EAreaType)area).LocalizeAreaName(), ui.Subtitle);
         }
+        else if (InRaid)
+        {
+            var titleWidth = ui.Title.CalcSize(new GUIContent(T("SHOPPING LIST", "LISTA DE COMPRAS"))).x;
+            GUI.Label(new Rect(Pad + titleWidth + 12, 36, 200, 26), "/  " + T("In raid", "Na raid"), ui.Subtitle);
+        }
 
-        // Language switch and close
+        // Refresh, language switch and close
+        if (!_confirming && ui.FlatButton(new Rect(W - 262, 24, 100, 24), _busy ? "..." : T("Refresh", "Atualizar"), false, !_busy))
+        {
+            Refresh();
+        }
+
         var en = new Rect(W - 150, 24, 38, 24);
         var pt = new Rect(W - 112, 24, 38, 24);
         if (ui.FlatButton(en, "EN", !PT)) _portuguese.Value = false;
@@ -167,6 +179,60 @@ public partial class Plugin
         return collapsed;
     }
 
+    private bool _sortDesc = true;
+
+    private void DrawOptions(float top)
+    {
+        var ui = _ui;
+        GUI.Label(new Rect(Pad, top, 60, 24), T("Sort by", "Ordenar"), ui.Muted);
+        float x = Pad + 60;
+        foreach (var (mode, label) in new[] { (SortMode.Default, T("Default", "Padrão")), (SortMode.Progress, T("Progress %", "Progresso %")), (SortMode.Rarity, T("Rarity", "Raridade")) })
+        {
+            bool active = _sort.Value == mode;
+            string text = active && mode != SortMode.Default ? label + (_sortDesc ? "  ▼" : "  ▲") : label;
+            if (ui.FlatButton(new Rect(x, top, 112, 24), text, active))
+            {
+                if (active) _sortDesc = !_sortDesc; else { _sort.Value = mode; _sortDesc = true; }
+            }
+
+            x += 118;
+        }
+
+        float fx = W - Pad - 250;
+        bool future = ui.Checkbox(new Rect(fx, top + 1, 24, 22), _future.Value);
+        GUI.Label(new Rect(fx + 24, top + 1, 226, 22), T("Show future upgrades", "Mostrar melhorias futuras"), ui.Text);
+        if (future != _future.Value)
+        {
+            _future.Value = future;
+            Refresh();
+        }
+    }
+
+    // Share of each requirement already covered, averaged so a big rouble count does not outweigh the items
+    private static float Progress(AreaPlan area) =>
+        area.Items.Count == 0 ? 1 : area.Items.Average(i => i.Required == 0 ? 1f : 1f - (float)i.Missing / i.Required);
+
+    private static int RarityKey(AreaPlan area)
+    {
+        var missing = area.Items.Where(i => i.Missing > 0).ToList();
+        if (missing.Count == 0) return -10000;
+        int top = missing.Max(i => i.Rarity);
+        return top * 1000 + missing.Count(i => i.Rarity == top);
+    }
+
+    private List<AreaPlan> Ordered(IEnumerable<AreaPlan> areas, Func<AreaPlan, bool> on)
+    {
+        var list = areas.ToList();
+        if (_sort.Value == SortMode.Default) return list.OrderByDescending(on).ToList();
+        Func<AreaPlan, float> key = _sort.Value == SortMode.Progress ? Progress : a => RarityKey(a);
+        var ordered = list.OrderByDescending(on);
+        return (_sortDesc ? ordered.ThenByDescending(key) : ordered.ThenBy(key)).ToList();
+    }
+
+    private List<Need> Rows(AreaPlan area) => _sort.Value != SortMode.Rarity
+        ? area.Items
+        : area.Items.OrderByDescending(i => i.Missing > 0).ThenBy(i => _sortDesc ? -i.Rarity : i.Rarity).ToList();
+
     private void DrawPlan(PlanResponse plan, float width)
     {
         var ui = _ui;
@@ -180,53 +246,26 @@ public partial class Plugin
         var areas = overview
             ? _allAreas!.Select(a => plan.Areas.FirstOrDefault(p => p.Type == a.Type) ?? a).ToList()
             : plan.Areas;
-        foreach (var area in areas)
+        foreach (var area in Ordered(areas, a => !overview || _selected!.Contains(a.Type)))
         {
-            bool on = !overview || _selected!.Contains(area.Type);
+            DrawArea(area, width, overview, "a" + area.Type);
+        }
+
+        if (_future.Value && plan.Future.Count > 0)
+        {
             var header = GUILayoutUtility.GetRect(width, 38);
-            ui.Box(header, on ? ui.Card : ui.Clear, ui.Line);
-            float x = header.x + 12;
-            if (overview)
+            ui.Box(header, ui.Card, ui.Line);
+            GUI.DrawTexture(new Rect(header.x, header.y, 2, header.height), ui.Tint(Ui.Grey, 1));
+            float hx = header.x + 12;
+            bool futureCollapsed = Collapsible(header, ref hx, "future");
+            GUI.Label(new Rect(hx, header.y, width, header.height), $"{T("FUTURE UPGRADES", "MELHORIAS FUTURAS")}   <color=#9a9a94>{T("nothing is bought for these", "nada é comprado para elas")}</color>", ui.Header);
+            GUILayout.Space(6);
+            foreach (var area in futureCollapsed ? [] : Ordered(plan.Future, _ => true))
             {
-                if (ui.Checkbox(new Rect(x, header.y, 24, header.height), on) != on)
-                {
-                    if (on) _selected.Remove(area.Type); else _selected.Add(area.Type);
-                    Refresh();
-                }
-
-                x += 26;
+                DrawArea(area, width, false, $"f{area.Type}-{area.Level}");
             }
 
-            bool collapsed = on && Collapsible(header, ref x, "a" + area.Type);
-            string name = ((EAreaType)area.Type).LocalizeAreaName();
-            var nameStyle = on ? ui.Header : new GUIStyle(ui.Header) { normal = { textColor = Ui.Grey } };
-            float nameWidth = nameStyle.CalcSize(new GUIContent(name)).x;
-            GUI.Label(new Rect(x, header.y, nameWidth, header.height), name, nameStyle);
-            ui.PillLabel(new Rect(x + nameWidth + 10, header.y + 10, 52, 18), $"{T("LVL", "NÍV")} {area.Level}", on ? Ui.Orange : Ui.Grey);
-            if (!on)
-            {
-                GUILayout.Space(6);
-                continue;
-            }
-
-            int ready = area.Items.Count(i => i.Missing == 0);
-            var bar = new Rect(header.xMax - 112, header.y + 17, 96, 4);
-            GUI.DrawTexture(bar, ui.Line);
-            GUI.DrawTexture(new Rect(bar.x, bar.y, bar.width * ready / Math.Max(1, area.Items.Count), bar.height), ready == area.Items.Count ? ui.Tint(Ui.Green, 1) : ui.OrangeTex);
-            var count = new GUIStyle(ui.Muted) { alignment = TextAnchor.MiddleRight };
-            GUI.Label(new Rect(bar.x - 90, header.y, 82, header.height), $"{ready}/{area.Items.Count} {T("ready", "prontos")}", count);
-            if (collapsed)
-            {
-                GUILayout.Space(6);
-                continue;
-            }
-
-            for (int i = 0; i < area.Items.Count; i++)
-            {
-                DrawNeedRow(area.Items[i], width, 0, i % 2 == 1);
-            }
-
-            GUILayout.Space(12);
+            GUILayout.Space(6);
         }
 
         if (plan.Crafts.Count > 0)
@@ -286,6 +325,58 @@ public partial class Plugin
         }
     }
 
+    private void DrawArea(AreaPlan area, float width, bool overview, string key)
+    {
+        var ui = _ui;
+        bool on = !overview || _selected!.Contains(area.Type);
+        var header = GUILayoutUtility.GetRect(width, 38);
+        ui.Box(header, on ? ui.Card : ui.Clear, ui.Line);
+        float x = header.x + 12;
+        if (overview)
+        {
+            if (ui.Checkbox(new Rect(x, header.y, 24, header.height), on) != on)
+            {
+                if (on) _selected!.Remove(area.Type); else _selected!.Add(area.Type);
+                Refresh();
+            }
+
+            x += 26;
+        }
+
+        bool collapsed = on && Collapsible(header, ref x, key);
+        string name = ((EAreaType)area.Type).LocalizeAreaName();
+        var nameStyle = on ? ui.Header : new GUIStyle(ui.Header) { normal = { textColor = Ui.Grey } };
+        float nameWidth = nameStyle.CalcSize(new GUIContent(name)).x;
+        GUI.Label(new Rect(x, header.y, nameWidth, header.height), name, nameStyle);
+        ui.PillLabel(new Rect(x + nameWidth + 10, header.y + 10, 52, 18), $"{T("LVL", "NÍV")} {area.Level}", on ? Ui.Orange : Ui.Grey);
+        if (!on)
+        {
+            GUILayout.Space(6);
+            return;
+        }
+
+        int ready = area.Items.Count(i => i.Missing == 0);
+        float progress = Progress(area);
+        var bar = new Rect(header.xMax - 112, header.y + 17, 96, 4);
+        GUI.DrawTexture(bar, ui.Line);
+        GUI.DrawTexture(new Rect(bar.x, bar.y, bar.width * progress, bar.height), ready == area.Items.Count ? ui.Tint(Ui.Green, 1) : ui.OrangeTex);
+        var count = new GUIStyle(ui.Muted) { alignment = TextAnchor.MiddleRight };
+        GUI.Label(new Rect(bar.x - 160, header.y, 152, header.height), $"{ready}/{area.Items.Count} {T("ready", "prontos")}  ·  {Mathf.FloorToInt(progress * 100)}%", count);
+        if (collapsed)
+        {
+            GUILayout.Space(6);
+            return;
+        }
+
+        var rows = Rows(area);
+        for (int i = 0; i < rows.Count; i++)
+        {
+            DrawNeedRow(rows[i], width, 0, i % 2 == 1);
+        }
+
+        GUILayout.Space(12);
+    }
+
     private void DrawNeedRow(Need need, float width, float indent, bool alt)
     {
         var ui = _ui;
@@ -297,7 +388,14 @@ public partial class Plugin
         DrawIcon(new Rect(x, r.y + 3, RowH - 6, RowH - 6), need.Tpl);
         x += RowH + 6;
 
-        string tags = (need.Fir ? "  <color=#F2AA3C><b>FIR</b></color>" : "") + (need.Tool ? $"  <color=#9a9a94>{T("tool", "ferramenta")}</color>" : "");
+        string rarity = need.Missing == 0 ? "" : need.Rarity switch
+        {
+            2 => $"  <color=#C792EA>{T("very rare", "muito raro")}</color>",
+            1 => $"  <color=#8FB8E8>{T("rare", "raro")}</color>",
+            0 => $"  <color=#9a9a94>{T("common", "comum")}</color>",
+            _ => "",
+        };
+        string tags = (need.Fir ? "  <color=#F2AA3C><b>FIR</b></color>" : "") + (need.Tool ? $"  <color=#9a9a94>{T("tool", "ferramenta")}</color>" : "") + rarity;
         GUI.Label(new Rect(x, r.y, 300 - indent, r.height), Name(need.Tpl) + tags, ui.Text);
 
         bool money = need.Plan == "money";
@@ -305,7 +403,13 @@ public partial class Plugin
         string haveColor = need.Missing == 0 ? "#78CC6B" : "#EFEBE0";
         string amount = money ? $"{Short(need.Required)}" : $"<color={haveColor}><b>{have}</b></color><color=#9a9a94> / {need.Required}</color>";
         GUI.Label(new Rect(r.x + 380, r.y, 110, r.height), amount, ui.Text);
-        if (need.Donated > 0)
+        if (need.Carried > 0)
+        {
+            var carried = new GUIStyle(ui.Muted);
+            carried.normal.textColor = Ui.Green;
+            GUI.Label(new Rect(r.x + 440, r.y, 86, r.height), $"{need.Carried} {T("on you", "com você")}", carried);
+        }
+        else if (need.Donated > 0)
         {
             GUI.Label(new Rect(r.x + 440, r.y, 80, r.height), $"{need.Donated} {T("donated", "doado")}", ui.Muted);
         }
@@ -326,6 +430,7 @@ public partial class Plugin
             "craft" => (T("CRAFT", "CRAFT"), Ui.Cream),
             "money" => need.Missing > 0 ? (T("NEED MONEY", "FALTA DINHEIRO"), Ui.Red) : (T("READY", "PRONTO"), Ui.Green),
             "unavailable" => (T("NOT FOR SALE", "SEM OFERTA"), Ui.Grey),
+            "later" => (T("BUY LATER", "COMPRAR DEPOIS"), Ui.Grey),
             _ => (T("FIND IN RAID", "ENCONTRADO EM RAID"), Ui.Red),
         };
         ui.PillLabel(new Rect(r.xMax - 144, r.y + 10, 136, 20), label, color);
@@ -357,9 +462,11 @@ public partial class Plugin
         var plan = _plan;
         int items = plan?.Purchases.Sum(p => p.Count) ?? 0;
         bool enough = plan is null || plan.Cost.All(c => plan.Money.TryGetValue(c.Key, out var have) && have >= c.Value);
-        bool can = !_busy && plan is not null && enough && plan.Operations.Count > 0;
+        bool can = !_busy && plan is not null && enough && plan.Operations.Count > 0 && !InRaid;
 
-        string text = items == 0
+        string text = InRaid
+            ? T("BUYING WORKS IN THE HIDEOUT", "COMPRAS SÓ NO ESCONDERIJO")
+            : items == 0
             ? T("NOTHING TO BUY", "NADA PARA COMPRAR")
             : !enough ? T("NOT ENOUGH MONEY", "DINHEIRO INSUFICIENTE")
             : T($"REVIEW {items} ITEMS", $"REVISAR {items} ITENS");

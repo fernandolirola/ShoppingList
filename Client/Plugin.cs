@@ -8,6 +8,7 @@ using BepInEx.Logging;
 using Comfort.Common;
 using EFT;
 using EFT.Hideout;
+using EFT.InventoryLogic;
 using HarmonyLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -17,7 +18,7 @@ using UnityEngine;
 
 namespace ShoppingList.Client;
 
-[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.0.0")]
+[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.1.0")]
 public partial class Plugin : BaseUnityPlugin
 {
     internal static ManualLogSource Log = null!;
@@ -26,6 +27,8 @@ public partial class Plugin : BaseUnityPlugin
     private ConfigEntry<bool> _portuguese = null!;
     private ConfigEntry<bool> _crafts = null!;
     private ConfigEntry<KeyboardShortcut> _hotkey = null!;
+    private ConfigEntry<bool> _future = null!;
+    private ConfigEntry<SortMode> _sort = null!;
 
     private AreaScreenSubstrate? _areaScreen;
     private HideoutScreenOverlay? _overlay;
@@ -52,7 +55,9 @@ public partial class Plugin : BaseUnityPlugin
         Log = Logger;
         _portuguese = Config.Bind("General", "Portuguese", false, "Show the panel in Portuguese");
         _crafts = Config.Bind("General", "Buy craft ingredients", true, "For found-in-raid items with an unlocked craft, buy that craft's ingredients");
-        _hotkey = Config.Bind("General", "Hotkey", new KeyboardShortcut(KeyCode.L, KeyCode.LeftControl), "Opens the shopping list in the hideout");
+        _hotkey = Config.Bind("General", "Hotkey", new KeyboardShortcut(KeyCode.L, KeyCode.LeftControl), "Opens the shopping list in the hideout, or in raid while the inventory is open");
+        _future = Config.Bind("General", "Show future upgrades", false, "Also list the levels after the next one");
+        _sort = Config.Bind("General", "Sort by", SortMode.Default, "How the areas in the list are sorted");
         new Harmony("com.zezinho.shoppinglist").PatchAll(typeof(ScrollPatch));
     }
 
@@ -68,7 +73,7 @@ public partial class Plugin : BaseUnityPlugin
             if (_overlay == null) _overlay = FindObjectOfType<HideoutScreenOverlay>(true);
         }
 
-        if (!InHideout && _open)
+        if (!Active && _open)
         {
             _open = false;
         }
@@ -89,13 +94,63 @@ public partial class Plugin : BaseUnityPlugin
             _toolbar.Sync(_overlay, () => T("Shopping list", "Lista de compras"), () => Toggle(null));
         }
 
-        if (InHideout && _hotkey.Value.IsDown())
+        if (Active && _hotkey.Value.IsDown())
         {
             Toggle(null);
         }
 
+        // Buying by hand or donating changes the stash or the hideout without going through the list
+        if (_open && Active && !_busy && Time.unscaledTime >= _nextSignature)
+        {
+            _nextSignature = Time.unscaledTime + 1.5f;
+            long signature = StashSignature();
+            if (_signatureKnown && signature != _signature)
+            {
+                Refresh();
+            }
+
+            _signature = signature;
+            _signatureKnown = true;
+        }
+
         ScrollPatch.Blocked = _open && InHideout;
-        _blocker.Sync(_open && InHideout, new Rect(_window.x * Ui.Scale, _window.y * Ui.Scale, _window.width * Ui.Scale, _window.height * Ui.Scale));
+        _blocker.Sync(_open && Shown, new Rect(_window.x * Ui.Scale, _window.y * Ui.Scale, _window.width * Ui.Scale, _window.height * Ui.Scale));
+    }
+
+    private long _signature;
+    private bool _signatureKnown;
+    private float _nextSignature;
+
+    private static long StashSignature()
+    {
+        long sum = 0;
+        if (RaidPlayer is { } player)
+        {
+            foreach (var item in player.Inventory.Equipment.GetAllItems())
+            {
+                sum = sum * 31 + item.StackObjectsCount + item.TemplateId.GetHashCode() + (item.SpawnedInSession ? 7 : 0);
+            }
+
+            return sum;
+        }
+
+        if (ClientAppUtils.GetClientApp()?.Session is ClientBackendSession session && session.Profile?.Inventory?.Stash is { } stash)
+        {
+            foreach (var item in stash.GetAllItems())
+            {
+                sum = sum * 31 + item.StackObjectsCount + item.TemplateId.GetHashCode();
+            }
+        }
+
+        if (Singleton<HideoutRepresentation>.Instance is { } hideout)
+        {
+            foreach (var area in hideout.AreaDatas)
+            {
+                sum = sum * 31 + area.CurrentLevel * 16 + (int)area.Status;
+            }
+        }
+
+        return sum;
     }
 
     private readonly AreaButton _areaButton = new();
@@ -104,23 +159,31 @@ public partial class Plugin : BaseUnityPlugin
 
     private bool InHideout => _overlay != null && _overlay.isActiveAndEnabled;
 
+    private static Player? RaidPlayer => Singleton<GameWorld>.Instantiated && Singleton<GameWorld>.Instance is { } world && world is not HideoutGameWorld ? world.MainPlayer : null;
+
+    private static bool InRaid => RaidPlayer != null;
+
+    private bool Active => InHideout || InRaid;
+
+    // In raid the list only shows with the cursor out, so clicks never reach the weapon
+    private bool Shown => InHideout || InRaid && Cursor.visible;
+
     private AreaData? OpenArea => _areaScreen != null && _areaScreen.isActiveAndEnabled ? DataToShow(_areaScreen) : null;
 
     private void Toggle(int? area)
     {
-        // The game can hand IMGUI the same click more than once
-        if (Time.unscaledTime - _lastToggle < 0.4f)
+        if (_open && _focusArea == area)
         {
+            // The game can hand over the same click twice; only that echo may not close a list it just opened
+            if (Time.unscaledTime - _lastToggle >= 0.25f)
+            {
+                _open = false;
+            }
+
             return;
         }
 
         _lastToggle = Time.unscaledTime;
-        if (_open && _focusArea == area)
-        {
-            _open = false;
-            return;
-        }
-
         _open = true;
         _focusArea = area;
         _status = "";
@@ -176,7 +239,7 @@ public partial class Plugin : BaseUnityPlugin
             return;
         }
 
-        var plan = new PlanResponse { Error = _raw.Error, Areas = _raw.Areas, Crafts = _raw.Crafts, Unavailable = _raw.Unavailable, Money = _raw.Money, FleaUnlocked = _raw.FleaUnlocked };
+        var plan = new PlanResponse { Error = _raw.Error, Areas = _raw.Areas, Crafts = _raw.Crafts, Future = _raw.Future, Unavailable = _raw.Unavailable, Money = _raw.Money, FleaUnlocked = _raw.FleaUnlocked };
         for (int i = 0; i < _raw.Purchases.Count && i < _raw.Operations.Count; i++)
         {
             var purchase = _raw.Purchases[i];
@@ -202,14 +265,30 @@ public partial class Plugin : BaseUnityPlugin
             return new PlanResponse();
         }
 
-        var body = JsonConvert.SerializeObject(new { areas, crafts = _crafts.Value });
+        Dictionary<string, int>? carried = null, carriedFir = null;
+        if (RaidPlayer is { } player)
+        {
+            carried = new Dictionary<string, int>();
+            carriedFir = new Dictionary<string, int>();
+            foreach (var item in player.Inventory.Equipment.GetAllItems())
+            {
+                string tpl = item.TemplateId.ToString();
+                carried[tpl] = carried.TryGetValue(tpl, out var any) ? any + item.StackObjectsCount : item.StackObjectsCount;
+                if (item.SpawnedInSession)
+                {
+                    carriedFir[tpl] = carriedFir.TryGetValue(tpl, out var fir) ? fir + item.StackObjectsCount : item.StackObjectsCount;
+                }
+            }
+        }
+
+        var body = JsonConvert.SerializeObject(new { areas, crafts = _crafts.Value, future = _future.Value, overview = _focusArea is null, carried, carriedFir });
         var json = await RequestHandler.PostJsonAsync("/shoppinglist/plan", body);
         return JsonConvert.DeserializeObject<PlanResponse>(json) ?? new PlanResponse();
     }
 
     private async void Buy()
     {
-        if (ClientAppUtils.GetClientApp()?.Session is not ClientBackendSession session || _plan is null)
+        if (InRaid || ClientAppUtils.GetClientApp()?.Session is not ClientBackendSession session || _plan is null)
         {
             return;
         }
@@ -254,7 +333,7 @@ public partial class Plugin : BaseUnityPlugin
 
             _status = lastError is null
                 ? T($"Done: {bought} purchase{(bought == 1 ? "" : "s")}", $"Pronto: {bought} compra{(bought == 1 ? "" : "s")}")
-                : T($"{bought} purchases, last error: {lastError}", $"{bought} compras, último erro: {lastError}");
+                : T($"{bought} purchases, last error: {lastError}", $"{bought} compras, Ãºltimo erro: {lastError}");
         }
         catch (Exception ex)
         {
@@ -264,10 +343,10 @@ public partial class Plugin : BaseUnityPlugin
         finally
         {
             _busy = false;
-            if (_plan?.Operations.Count == 0)
-            {
-                _confirming = false;
-            }
+            _signatureKnown = false;
+            // Back to the list, which was re-planned after the purchases, so the progress shows
+            _confirming = false;
+            _scroll = Vector2.zero;
         }
     }
 
@@ -292,7 +371,7 @@ public partial class Plugin : BaseUnityPlugin
 
     private void OnGUI()
     {
-        if (!InHideout)
+        if (!Shown)
         {
             return;
         }
@@ -303,7 +382,11 @@ public partial class Plugin : BaseUnityPlugin
 
         // Fallback buttons, only drawn when the game's own buttons could not be copied
         var area = OpenArea;
-        if (area != null && area.NextStage != null && area.Status != EAreaStatus.Upgrading)
+        if (!InHideout)
+        {
+            // In raid only the hotkey opens it
+        }
+        else if (area != null && area.NextStage != null && area.Status != EAreaStatus.Upgrading)
         {
             var rect = new Rect(Screen.width / Ui.Scale / 2 + 130, 64, 190, 30);
             if (!_areaButton.Exists && _ui.FlatButton(rect, T("Shopping list", "Lista de compras"), true))
@@ -328,9 +411,9 @@ public partial class Plugin : BaseUnityPlugin
 
     private static string Currency(string tpl) => tpl switch
     {
-        "5449016a4bdc2d6f028b456f" => "₽",
+        "5449016a4bdc2d6f028b456f" => "â‚½",
         "5696686a4bdc2da3298b456a" => "$",
-        "569668774bdc2da2298b4568" => "€",
+        "569668774bdc2da2298b4568" => "â‚¬",
         _ => Name(tpl),
     };
 }

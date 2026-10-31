@@ -8,12 +8,19 @@ public record PlanRequest : IRequestData
     // Empty means every area whose other requirements are already met
     [JsonPropertyName("areas")] public List<int>? Areas { get; init; }
     [JsonPropertyName("crafts")] public bool Crafts { get; init; } = true;
+    [JsonPropertyName("future")] public bool Future { get; init; }
+    // The overview also lists later levels of areas that are not ready yet
+    [JsonPropertyName("overview")] public bool Overview { get; init; }
+    // Items on the player in raid, which the server profile does not have yet
+    [JsonPropertyName("carried")] public Dictionary<string, int>? Carried { get; init; }
+    [JsonPropertyName("carriedFir")] public Dictionary<string, int>? CarriedFir { get; init; }
 }
 
 public record PlanResponse
 {
     [JsonPropertyName("areas")] public List<AreaPlan> Areas { get; init; } = [];
     [JsonPropertyName("crafts")] public List<CraftPlan> Crafts { get; init; } = [];
+    [JsonPropertyName("future")] public List<AreaPlan> Future { get; init; } = [];
     [JsonPropertyName("purchases")] public List<Purchase> Purchases { get; init; } = [];
     [JsonPropertyName("unavailable")] public List<Need> Unavailable { get; init; } = [];
     [JsonPropertyName("cost")] public Dictionary<string, long> Cost { get; init; } = [];
@@ -47,10 +54,13 @@ public record Need
     [JsonPropertyName("required")] public int Required { get; init; }
     [JsonPropertyName("have")] public int Have { get; set; }
     [JsonPropertyName("donated")] public int Donated { get; init; }
+    [JsonPropertyName("carried")] public int Carried { get; set; }
+    // -1 unknown, 0 common, 1 rare, 2 super rare
+    [JsonPropertyName("rarity")] public int Rarity { get; set; } = -1;
     [JsonPropertyName("missing")] public int Missing { get; set; }
     [JsonPropertyName("fir")] public bool Fir { get; init; }
     [JsonPropertyName("tool")] public bool Tool { get; init; }
-    // "ok", "buy", "partial", "craft", "money", "none" (FIR with no unlocked craft) or "unavailable"
+    // "ok", "buy", "partial", "craft", "money", "none" (FIR with no unlocked craft), "unavailable" or "later" (future level)
     [JsonPropertyName("plan")] public string Plan { get; set; } = "none";
 }
 
