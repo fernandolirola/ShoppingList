@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.2
+
+- Fixed the rouble and euro signs showing as garbled text (for example in Total cost), and the accent in a Portuguese message.
+
 ## 1.1.1
 
 - Fixed lag in raid: the list asks the server once when opened, then counts what you carry on the game side while it is on screen.

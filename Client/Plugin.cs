@@ -18,7 +18,7 @@ using UnityEngine;
 
 namespace ShoppingList.Client;
 
-[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.1.1")]
+[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.1.2")]
 public partial class Plugin : BaseUnityPlugin
 {
     internal static ManualLogSource Log = null!;
@@ -401,7 +401,7 @@ public partial class Plugin : BaseUnityPlugin
 
             _status = lastError is null
                 ? T($"Done: {bought} purchase{(bought == 1 ? "" : "s")}", $"Pronto: {bought} compra{(bought == 1 ? "" : "s")}")
-                : T($"{bought} purchases, last error: {lastError}", $"{bought} compras, Ãºltimo erro: {lastError}");
+                : T($"{bought} purchases, last error: {lastError}", $"{bought} compras, último erro: {lastError}");
         }
         catch (Exception ex)
         {
@@ -479,9 +479,9 @@ public partial class Plugin : BaseUnityPlugin
 
     private static string Currency(string tpl) => tpl switch
     {
-        "5449016a4bdc2d6f028b456f" => "â‚½",
+        "5449016a4bdc2d6f028b456f" => "₽",
         "5696686a4bdc2da3298b456a" => "$",
-        "569668774bdc2da2298b4568" => "â‚¬",
+        "569668774bdc2da2298b4568" => "€",
         _ => Name(tpl),
     };
 }

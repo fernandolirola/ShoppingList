@@ -1,6 +1,5 @@
-**zezinho's Shopping List 1.1.1**
+**zezinho's Shopping List 1.1.2**
 
-- Fixed lag in raid: the list asks the server once when opened, then counts what you carry on the game side while it is on screen.
-- The list now opens with ] (Ctrl+L inspects the weapon in raid). The setting is now called "Open key", so it resets to ] once.
+- Fixed the rouble and euro signs showing as garbled text (for example in Total cost), and the accent in a Portuguese message.
 
 **Install:** extract the zip into your game folder. Replace both parts (server and client).
