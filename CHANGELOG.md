@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1
+
+- Fixed lag in raid: the list only refreshes while it is on screen, ignores items it does not need (shooting no longer re-plans it) and skips the flea market search.
+
 ## 1.1.0
 
 - Open the list in raid (Ctrl+L with the inventory open). It counts what you carry, marks it "on you" and updates as you loot. Buying stays in the hideout.

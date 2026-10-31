@@ -1,4 +1,4 @@
-using System.Text.Json.Serialization;
+﻿using System.Text.Json.Serialization;
 using SPTarkov.Server.Core.Models.Utils;
 
 namespace ShoppingList;
@@ -14,6 +14,8 @@ public record PlanRequest : IRequestData
     // Items on the player in raid, which the server profile does not have yet
     [JsonPropertyName("carried")] public Dictionary<string, int>? Carried { get; init; }
     [JsonPropertyName("carriedFir")] public Dictionary<string, int>? CarriedFir { get; init; }
+    // Nothing can be bought in raid, so the offer search is skipped
+    [JsonPropertyName("raid")] public bool Raid { get; init; }
 }
 
 public record PlanResponse

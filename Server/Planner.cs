@@ -121,7 +121,7 @@ public sealed class Planner(
         foreach (var (tpl, count) in carriedNonFir) nonFirPool[tpl] = nonFirPool.GetValueOrDefault(tpl) + count;
 
         var offers = new Dictionary<MongoId, List<Offer>>();
-        List<Offer> OffersFor(MongoId tpl) => offers.TryGetValue(tpl, out var list) ? list : offers[tpl] = FindOffers(sessionId, pmc, tpl, response.FleaUnlocked);
+        List<Offer> OffersFor(MongoId tpl) => offers.TryGetValue(tpl, out var list) ? list : offers[tpl] = request.Raid ? [] : FindOffers(sessionId, pmc, tpl, response.FleaUnlocked);
 
         foreach (var (tpl, missing) in firToCraft)
         {
@@ -148,7 +148,7 @@ public sealed class Planner(
             PlanFuture(pmc, request, response, firPool, nonFirPool);
         }
 
-        BuildPurchases(response, toBuy, OffersFor, areaNeeds.Select(n => n.need).Concat(response.Crafts.SelectMany(c => c.Ingredients)));
+        if (!request.Raid) BuildPurchases(response, toBuy, OffersFor, areaNeeds.Select(n => n.need).Concat(response.Crafts.SelectMany(c => c.Ingredients)));
         foreach (var money in Money.GetMoneyTpls())
         {
             response.Money[money.ToString()] = anyHave.GetValueOrDefault(money);

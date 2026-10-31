@@ -18,7 +18,7 @@ using UnityEngine;
 
 namespace ShoppingList.Client;
 
-[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.1.0")]
+[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.1.1")]
 public partial class Plugin : BaseUnityPlugin
 {
     internal static ManualLogSource Log = null!;
@@ -100,9 +100,10 @@ public partial class Plugin : BaseUnityPlugin
         }
 
         // Buying by hand or donating changes the stash or the hideout without going through the list
-        if (_open && Active && !_busy && Time.unscaledTime >= _nextSignature)
+        // In raid only while the list is on screen, so a closed inventory costs nothing during fights
+        if (_open && Shown && !_busy && Time.unscaledTime >= _nextSignature)
         {
-            _nextSignature = Time.unscaledTime + 1.5f;
+            _nextSignature = Time.unscaledTime + (InRaid ? 3f : 1.5f);
             long signature = StashSignature();
             if (_signatureKnown && signature != _signature)
             {
@@ -121,13 +122,16 @@ public partial class Plugin : BaseUnityPlugin
     private bool _signatureKnown;
     private float _nextSignature;
 
-    private static long StashSignature()
+    private long StashSignature()
     {
         long sum = 0;
         if (RaidPlayer is { } player)
         {
+            // Only items the list asks for, or every shot would change the magazine count and re-plan
+            var wanted = WantedTpls();
             foreach (var item in player.Inventory.Equipment.GetAllItems())
             {
+                if (!wanted.Contains(item.TemplateId.ToString())) continue;
                 sum = sum * 31 + item.StackObjectsCount + item.TemplateId.GetHashCode() + (item.SpawnedInSession ? 7 : 0);
             }
 
@@ -151,6 +155,23 @@ public partial class Plugin : BaseUnityPlugin
         }
 
         return sum;
+    }
+
+    private HashSet<string> _wanted = new();
+    private PlanResponse? _wantedFrom;
+
+    private HashSet<string> WantedTpls()
+    {
+        if (_raw != _wantedFrom)
+        {
+            _wantedFrom = _raw;
+            _wanted = _raw is null
+                ? new HashSet<string>()
+                : new HashSet<string>(_raw.Areas.Concat(_raw.Future).SelectMany(a => a.Items).Concat(_raw.Crafts.SelectMany(c => c.Ingredients)).Select(n => n.Tpl)
+                    .Concat(_raw.Crafts.Select(c => c.Tpl)));
+        }
+
+        return _wanted;
     }
 
     private readonly AreaButton _areaButton = new();
@@ -281,7 +302,7 @@ public partial class Plugin : BaseUnityPlugin
             }
         }
 
-        var body = JsonConvert.SerializeObject(new { areas, crafts = _crafts.Value, future = _future.Value, overview = _focusArea is null, carried, carriedFir });
+        var body = JsonConvert.SerializeObject(new { areas, crafts = _crafts.Value, future = _future.Value, overview = _focusArea is null, carried, carriedFir, raid = carried != null });
         var json = await RequestHandler.PostJsonAsync("/shoppinglist/plan", body);
         return JsonConvert.DeserializeObject<PlanResponse>(json) ?? new PlanResponse();
     }
