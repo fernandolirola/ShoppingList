@@ -343,18 +343,12 @@ public partial class Plugin
             x += 26;
         }
 
-        bool collapsed = on && Collapsible(header, ref x, key);
+        bool collapsed = Collapsible(header, ref x, key);
         string name = ((EAreaType)area.Type).LocalizeAreaName();
         var nameStyle = on ? ui.Header : new GUIStyle(ui.Header) { normal = { textColor = Ui.Grey } };
         float nameWidth = nameStyle.CalcSize(new GUIContent(name)).x;
         GUI.Label(new Rect(x, header.y, nameWidth, header.height), name, nameStyle);
         ui.PillLabel(new Rect(x + nameWidth + 10, header.y + 10, 52, 18), $"{T("LVL", "NÍV")} {area.Level}", on ? Ui.Orange : Ui.Grey);
-        if (!on)
-        {
-            GUILayout.Space(6);
-            return;
-        }
-
         int ready = area.Items.Count(i => i.Missing == 0);
         float progress = Progress(area);
         var bar = new Rect(header.xMax - 112, header.y + 17, 96, 4);
@@ -371,13 +365,13 @@ public partial class Plugin
         var rows = Rows(area);
         for (int i = 0; i < rows.Count; i++)
         {
-            DrawNeedRow(rows[i], width, 0, i % 2 == 1);
+            DrawNeedRow(rows[i], width, 0, i % 2 == 1, on);
         }
 
         GUILayout.Space(12);
     }
 
-    private void DrawNeedRow(Need need, float width, float indent, bool alt)
+    private void DrawNeedRow(Need need, float width, float indent, bool alt, bool purchasing = true)
     {
         var ui = _ui;
         var r = GUILayoutUtility.GetRect(width, RowH);
@@ -414,7 +408,7 @@ public partial class Plugin
             GUI.Label(new Rect(r.x + 440, r.y, 80, r.height), $"{need.Donated} {T("donated", "doado")}", ui.Muted);
         }
 
-        bool buyable = need.Plan is "buy" or "partial";
+        bool buyable = purchasing && need.Plan is ("buy" or "partial");
         bool skipped = buyable && _skipped.Contains(need.Tpl);
         if (buyable && ui.Checkbox(new Rect(r.xMax - 172, r.y, 22, r.height), !skipped) == skipped)
         {
@@ -422,7 +416,7 @@ public partial class Plugin
             ApplySkips();
         }
 
-        var (label, color) = skipped ? (T("SKIPPED", "IGNORADO"), Ui.Grey) : need.Plan switch
+        var (label, color) = !purchasing && need.Missing > 0 ? (T("NOT SELECTED", "NÃO SELECIONADO"), Ui.Grey) : skipped ? (T("SKIPPED", "IGNORADO"), Ui.Grey) : need.Plan switch
         {
             "ok" => (T("READY", "PRONTO"), Ui.Green),
             "buy" => (T("BUY", "COMPRAR"), Ui.Orange),

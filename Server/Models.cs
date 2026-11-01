@@ -1,10 +1,11 @@
-﻿using System.Text.Json.Serialization;
+using System.Text.Json.Serialization;
 using SPTarkov.Server.Core.Models.Utils;
 
 namespace ShoppingList;
 
 public record PlanRequest : IRequestData
 {
+    [JsonPropertyName("excludeAll")] public bool ExcludeAll { get; init; }
     // Empty means every area whose other requirements are already met
     [JsonPropertyName("areas")] public List<int>? Areas { get; init; }
     [JsonPropertyName("crafts")] public bool Crafts { get; init; } = true;
@@ -17,6 +18,7 @@ public record PlanRequest : IRequestData
 
 public record PlanResponse
 {
+    [JsonPropertyName("availableAreas")] public List<AreaPlan> AvailableAreas { get; init; } = [];
     [JsonPropertyName("areas")] public List<AreaPlan> Areas { get; init; } = [];
     [JsonPropertyName("crafts")] public List<CraftPlan> Crafts { get; init; } = [];
     [JsonPropertyName("future")] public List<AreaPlan> Future { get; init; } = [];

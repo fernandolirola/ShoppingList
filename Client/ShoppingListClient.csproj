@@ -1,11 +1,11 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net472</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <AssemblyName>zezinho.ShoppingList</AssemblyName>
     <RootNamespace>ShoppingList.Client</RootNamespace>
-    <Version>1.1.3</Version>
+    <Version>1.1.4</Version>
     <SPTPath Condition="'$(SPTPath)' == ''">C:\SPT</SPTPath>
     <Managed>$(SPTPath)\EscapeFromTarkov_Data\Managed</Managed>
   </PropertyGroup>

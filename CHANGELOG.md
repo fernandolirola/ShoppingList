@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.4
+
+- Show every pending next upgrade in the overview, including areas with unmet prerequisites. Locked areas start unticked.
+- Refresh the area list with the profile instead of keeping only the first list received.
+- Unselected areas can be expanded and collapsed independently of their purchase checkboxes. Their requirements preview your stash and donations without reserving items or adding purchases.
+- Require the recipe station to be built and its required level met before suggesting a craft, including recipes without an Area requirement.
+- Hide automatic upgrade stages, including the internal Weapon Rack storage shown as hideout_area_25_name.
+- Keep the overview and future upgrades available when every area is unticked, without duplicating locked next upgrades in the future section.
+
 ## 1.1.3
 
 - Fixed small stutters in raid on big maps: the plugin no longer searches the whole scene for hideout screens while you are in a raid.

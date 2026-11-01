@@ -18,7 +18,7 @@ using UnityEngine;
 
 namespace ShoppingList.Client;
 
-[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.1.3")]
+[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.1.4")]
 public partial class Plugin : BaseUnityPlugin
 {
     internal static ManualLogSource Log = null!;
@@ -252,10 +252,11 @@ public partial class Plugin : BaseUnityPlugin
             {
                 _status = _plan.Error;
             }
-            else if (_focusArea is null && _selected is null)
+            else if (_focusArea is null)
             {
-                _selected = new HashSet<int>(_plan.Areas.Select(a => a.Type));
-                _allAreas = _plan.Areas;
+                if (_selected is null) _selected = new HashSet<int>(_plan.Areas.Select(a => a.Type));
+                _allAreas = _plan.AvailableAreas;
+                _selected.IntersectWith(_allAreas.Select(a => a.Type));
             }
         }
         catch (Exception ex)
@@ -278,7 +279,7 @@ public partial class Plugin : BaseUnityPlugin
             return;
         }
 
-        var plan = new PlanResponse { Error = _raw.Error, Areas = _raw.Areas, Crafts = _raw.Crafts, Future = _raw.Future, Unavailable = _raw.Unavailable, Money = _raw.Money, FleaUnlocked = _raw.FleaUnlocked };
+        var plan = new PlanResponse { AvailableAreas = _raw.AvailableAreas, Error = _raw.Error, Areas = _raw.Areas, Crafts = _raw.Crafts, Future = _raw.Future, Unavailable = _raw.Unavailable, Money = _raw.Money, FleaUnlocked = _raw.FleaUnlocked };
         for (int i = 0; i < _raw.Purchases.Count && i < _raw.Operations.Count; i++)
         {
             var purchase = _raw.Purchases[i];
@@ -299,12 +300,7 @@ public partial class Plugin : BaseUnityPlugin
     private async Task<PlanResponse> RequestPlan()
     {
         var areas = _focusArea is { } one ? new List<int> { one } : _selected?.ToList() ?? new List<int>();
-        if (_focusArea is null && _selected is { Count: 0 })
-        {
-            return new PlanResponse();
-        }
-
-        var body = JsonConvert.SerializeObject(new { areas, crafts = _crafts.Value, future = _future.Value, overview = _focusArea is null, raid = InRaid });
+        var body = JsonConvert.SerializeObject(new { areas, excludeAll = _focusArea is null && _selected is { Count: 0 }, crafts = _crafts.Value, future = _future.Value, overview = _focusArea is null, raid = InRaid });
         var json = await RequestHandler.PostJsonAsync("/shoppinglist/plan", body);
         return JsonConvert.DeserializeObject<PlanResponse>(json) ?? new PlanResponse();
     }
@@ -353,7 +349,7 @@ public partial class Plugin : BaseUnityPlugin
 
         return new PlanResponse
         {
-            Error = stashPlan.Error, Areas = areas, Future = future, Crafts = stashPlan.Crafts, Purchases = stashPlan.Purchases, Operations = stashPlan.Operations,
+            AvailableAreas = stashPlan.AvailableAreas, Error = stashPlan.Error, Areas = areas, Future = future, Crafts = stashPlan.Crafts, Purchases = stashPlan.Purchases, Operations = stashPlan.Operations,
             Unavailable = stashPlan.Unavailable, Cost = stashPlan.Cost, Money = stashPlan.Money, TotalRub = stashPlan.TotalRub, FleaUnlocked = stashPlan.FleaUnlocked,
         };
     }

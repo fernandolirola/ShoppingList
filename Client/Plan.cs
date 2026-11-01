@@ -6,6 +6,7 @@ namespace ShoppingList.Client;
 
 public class PlanResponse
 {
+    [JsonProperty("availableAreas")] public List<AreaPlan> AvailableAreas = new();
     [JsonProperty("error")] public string? Error;
     [JsonProperty("areas")] public List<AreaPlan> Areas = new();
     [JsonProperty("crafts")] public List<CraftPlan> Crafts = new();

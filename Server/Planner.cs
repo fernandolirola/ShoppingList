@@ -1,4 +1,4 @@
-﻿using SPTarkov.Common.Models.Logging;
+using SPTarkov.Common.Models.Logging;
 using SPTarkov.DI.Annotations;
 using SPTarkov.Server.Core.Extensions;
 using SPTarkov.Server.Core.Helpers;
@@ -51,7 +51,31 @@ public sealed class Planner(
 
         var donations = hideoutInProgress.GetDonations(sessionId);
         var areaNeeds = new List<(AreaPlan plan, StageRequirement req, Need need)>();
-        foreach (var (area, stage, level, ready) in SelectAreas(pmc, request.Areas))
+        if (request.Overview)
+        {
+            foreach (var (area, stage, level, ready) in SelectAreas(pmc, null, all: true))
+            {
+                var preview = new AreaPlan { Type = (int)area.Type!.Value, Level = level, Ready = ready };
+                // Each unticked area previews the stash independently; it reserves no items or purchases.
+                var previewFir = new Dictionary<MongoId, int>(firHave);
+                var previewNonFir = anyHave.ToDictionary(kv => kv.Key, kv => kv.Value - firHave.GetValueOrDefault(kv.Key));
+                var donated = donations.GetValueOrDefault(preview.Type);
+                foreach (var req in (stage.Requirements ?? []).Where(r => r.Type == "Item").OrderByDescending(r => r.IsSpawnedInSession == true))
+                {
+                    int required = req.Count ?? 0;
+                    int given = Math.Min(required, donated?.GetValueOrDefault(req.TemplateId.ToString()) ?? 0);
+                    int remaining = required - given;
+                    bool fir = req.IsSpawnedInSession == true;
+                    int missing = fir ? Take(previewFir, req.TemplateId, remaining) : Take(previewNonFir, req.TemplateId, Take(previewFir, req.TemplateId, remaining));
+                    preview.Items.Add(new Need { Tpl = req.TemplateId.ToString(), Required = required, Donated = given,
+                        Fir = fir, Have = remaining - missing, Missing = missing, Rarity = Rarity(req.TemplateId),
+                        Plan = missing == 0 ? "ok" : paymentHelper.IsMoneyTpl(req.TemplateId) ? "money" : "later" });
+                }
+                response.AvailableAreas.Add(preview);
+            }
+        }
+
+        foreach (var (area, stage, level, ready) in SelectAreas(pmc, request.ExcludeAll ? [-1] : request.Areas))
         {
             var plan = new AreaPlan { Type = (int)area.Type!.Value, Level = level, Ready = ready };
             response.Areas.Add(plan);
@@ -168,7 +192,7 @@ public sealed class Planner(
             else if (constructing ? request.Overview || wanted : request.Overview && !wanted && !IsReady(pmc, area, built + 1))
             {
                 // Unticked areas stay out; the overview adds areas still locked behind other upgrades
-                from = built + 1;
+                from = built + (constructing ? 1 : 2);
             }
             else
             {
@@ -177,7 +201,7 @@ public sealed class Planner(
 
             for (int level = from; area.Stages.ContainsKey(level.ToString()); level++)
             {
-                levels.Add((area, level));
+                if (IsManualStage(area.Stages[level.ToString()])) levels.Add((area, level));
             }
         }
 
@@ -199,6 +223,8 @@ public sealed class Planner(
 
         response.Future.Sort((a, b) => a.Type != b.Type ? a.Type.CompareTo(b.Type) : a.Level.CompareTo(b.Level));
     }
+
+    private static bool IsManualStage(Stage stage) => stage.AutoUpgrade != true;
 
     private static bool IsReady(PmcData pmc, HideoutArea area, int level) =>
         area.Stages?.GetValueOrDefault(level.ToString()) is { } stage && (stage.Requirements ?? []).All(r => r.Type switch
@@ -236,7 +262,7 @@ public sealed class Planner(
         return _rarity[tpl] = rarity;
     }
 
-    private IEnumerable<(HideoutArea area, Stage stage, int level, bool ready)> SelectAreas(PmcData pmc, List<int>? wanted)
+    private IEnumerable<(HideoutArea area, Stage stage, int level, bool ready)> SelectAreas(PmcData pmc, List<int>? wanted, bool all = false)
     {
         foreach (var area in hideoutTable.Areas)
         {
@@ -247,14 +273,14 @@ public sealed class Planner(
 
             var profileArea = pmc.Hideout?.Areas?.FirstOrDefault(a => a.Type == area.Type);
             int next = (profileArea?.Level ?? 0) + 1;
-            if (area.Stages?.GetValueOrDefault(next.ToString()) is not { } stage || profileArea?.Constructing == true)
+            if (area.Stages?.GetValueOrDefault(next.ToString()) is not { } stage || profileArea?.Constructing == true || !IsManualStage(stage))
             {
                 continue;
             }
 
             bool ready = IsReady(pmc, area, next);
 
-            bool selected = wanted is { Count: > 0 } ? wanted.Contains((int)area.Type.Value) : ready;
+            bool selected = all || (wanted is { Count: > 0 } ? wanted.Contains((int)area.Type.Value) : ready);
             if (selected)
             {
                 yield return (area, stage, next, ready);
@@ -266,6 +292,7 @@ public sealed class Planner(
     {
         var unlocked = pmc.UnlockedInfo?.UnlockedProductionRecipe ?? [];
         var candidates = (hideoutTable.Production.Recipes ?? [])
+            .Where(r => r.AreaType is not null && (pmc.Hideout?.Areas?.FirstOrDefault(a => (int)a.Type == (int)r.AreaType.Value)?.Level ?? 0) > 0)
             .Where(r => r.EndProduct == tpl && r.Continuous != true && r.IsCodeProduction != true && (r.Locked != true || unlocked.Contains(r.Id)))
             .Where(r => (r.Requirements ?? []).Where(q => q.Type == "Area").All(q =>
                 (pmc.Hideout?.Areas?.FirstOrDefault(a => (int)a.Type == q.AreaType)?.Level ?? 0) >= (q.RequiredLevel ?? 0)))
