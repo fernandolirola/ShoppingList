@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.1
+
+- The Shopping list button no longer shows on areas that cannot be upgraded any more, such as the Library and the Cultist Circle.
+
 ## 1.2.0
 
 - The review screen shows each item's purchase live: queued, buying, bought, or why it failed (sold out, price went up, no money, no space, trader limit), with a progress bar per item.

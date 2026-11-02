@@ -17,7 +17,7 @@ using UnityEngine;
 
 namespace ShoppingList.Client;
 
-[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.2.0")]
+[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.2.1")]
 public partial class Plugin : BaseUnityPlugin
 {
     internal static ManualLogSource Log = null!;
@@ -82,6 +82,10 @@ public partial class Plugin : BaseUnityPlugin
         new Harmony("com.zezinho.shoppinglist").PatchAll(typeof(ScrollPatch));
     }
 
+    // StageAt returns an empty stage instead of null past the last level (library, cultist circle), so NextStage is never null
+    private static bool CanUpgrade(AreaData? area) =>
+        area != null && area.Template.Stages.ContainsKey(area.CurrentLevel + 1) && area.Status != EAreaStatus.Upgrading;
+
     private bool PT => _portuguese.Value;
     private string T(string en, string pt) => PT ? pt : en;
 
@@ -106,7 +110,7 @@ public partial class Plugin : BaseUnityPlugin
         if (_areaScreen != null)
         {
             var area = OpenArea;
-            bool canUpgrade = area != null && area.NextStage != null && area.Status != EAreaStatus.Upgrading;
+            bool canUpgrade = CanUpgrade(area);
             _areaIcon ??= ToolbarButton.CartSprite();
             _areaButton.Sync(_areaScreen, canUpgrade, T("Shopping list", "Lista de compras"), _areaIcon, () =>
             {
@@ -399,7 +403,7 @@ public partial class Plugin : BaseUnityPlugin
         {
             // In raid only the hotkey opens it
         }
-        else if (area != null && area.NextStage != null && area.Status != EAreaStatus.Upgrading)
+        else if (area != null && CanUpgrade(area))
         {
             var rect = new Rect(Screen.width / Ui.Scale / 2 + 130, 64, 190, 30);
             if (!_areaButton.Exists && _ui.FlatButton(rect, T("Shopping list", "Lista de compras"), true))
