@@ -13,6 +13,7 @@ internal sealed class ToolbarButton
     private static readonly AccessTools.FieldRef<HideoutScreenOverlay, ComplementaryButton> Customization = AccessTools.FieldRefAccess<HideoutScreenOverlay, ComplementaryButton>("_customizationButton");
     private static readonly AccessTools.FieldRef<HideoutScreenOverlay, ComplementaryButton> Generator = AccessTools.FieldRefAccess<HideoutScreenOverlay, ComplementaryButton>("_generatorButton");
     private static readonly AccessTools.FieldRef<ComplementaryButton, Sprite> DefaultIcon = AccessTools.FieldRefAccess<ComplementaryButton, Sprite>("_defaultIcon");
+    private static readonly AccessTools.FieldRef<ComplementaryButton, bool> IsSelected = AccessTools.FieldRefAccess<ComplementaryButton, bool>("_isSelected");
     private static readonly AccessTools.FieldRef<ComplementaryButton, Sprite> SelectedIcon = AccessTools.FieldRefAccess<ComplementaryButton, Sprite>("_selectedIcon");
 
     private ComplementaryButton? _button;
@@ -22,7 +23,7 @@ internal sealed class ToolbarButton
     public bool Exists => _button != null;
 
     // Called every frame while the hideout overlay is around; builds the button once, then mirrors the template's visibility
-    public void Sync(HideoutScreenOverlay overlay, Func<string> tooltip, Action onClick)
+    public void Sync(HideoutScreenOverlay overlay, bool open, Func<string> tooltip, Action onClick)
     {
         // Not before the overlay is first shown: mods like Vertical Hideout rearrange its buttons in its Awake, which runs then
         if (_failed || (_button == null && !overlay.isActiveAndEnabled))
@@ -41,6 +42,12 @@ internal sealed class ToolbarButton
             if (_button != null && _button.gameObject.activeSelf != visible)
             {
                 if (visible) Show(tooltip, onClick); else _button.gameObject.SetActive(false);
+            }
+
+            // Follows the window like the customization button follows its panel, so closing it any other way clears the highlight
+            if (_button != null && _button.gameObject.activeSelf && IsSelected(_button) != open)
+            {
+                _button.SetSelectedStatus(open);
             }
         }
         catch (Exception ex)

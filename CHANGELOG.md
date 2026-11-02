@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.3
+
+- The hideout toolbar button's blue highlight now follows whether the window is open, so closing the window with Esc or another control clears it too.
+
 ## 1.2.2
 
 - The Shopping list button now sits with the other hideout buttons when Vertical Hideout is installed, instead of on top of the area list. Thanks to Recker for reporting it.

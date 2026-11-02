@@ -17,7 +17,7 @@ using UnityEngine;
 
 namespace ShoppingList.Client;
 
-[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.2.2")]
+[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.2.3")]
 public partial class Plugin : BaseUnityPlugin
 {
     internal static ManualLogSource Log = null!;
@@ -120,7 +120,7 @@ public partial class Plugin : BaseUnityPlugin
 
         if (_overlay != null)
         {
-            _toolbar.Sync(_overlay, () => T("Shopping list", "Lista de compras"), () => Toggle(null));
+            _toolbar.Sync(_overlay, _open, () => T("Shopping list", "Lista de compras"), () => Toggle(null));
         }
 
         if (Active && _hotkey.Value.IsDown())
