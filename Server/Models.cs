@@ -9,7 +9,8 @@ public record PlanRequest : IRequestData
     // Empty means every area whose other requirements are already met
     [JsonPropertyName("areas")] public List<int>? Areas { get; init; }
     [JsonPropertyName("crafts")] public bool Crafts { get; init; } = true;
-    [JsonPropertyName("future")] public bool Future { get; init; }
+    // Area type to the highest level to buy for; areas left out stop at their next level
+    [JsonPropertyName("targets")] public Dictionary<int, int>? Targets { get; init; }
     // The overview also lists later levels of areas that are not ready yet
     [JsonPropertyName("overview")] public bool Overview { get; init; }
     // Nothing can be bought in raid, so the offer search is skipped
@@ -36,7 +37,19 @@ public record AreaPlan
     [JsonPropertyName("type")] public int Type { get; init; }
     [JsonPropertyName("level")] public int Level { get; init; }
     [JsonPropertyName("ready")] public bool Ready { get; init; }
+    [JsonPropertyName("maxLevel")] public int MaxLevel { get; init; }
+    // What still blocks this level, besides its items
+    [JsonPropertyName("locks")] public List<Lock> Locks { get; init; } = [];
     [JsonPropertyName("items")] public List<Need> Items { get; init; } = [];
+}
+
+public record Lock
+{
+    // "area" or "trader"
+    [JsonPropertyName("kind")] public string Kind { get; init; } = "";
+    [JsonPropertyName("area")] public int Area { get; init; }
+    [JsonPropertyName("trader")] public string Trader { get; init; } = "";
+    [JsonPropertyName("level")] public int Level { get; init; }
 }
 
 public record CraftPlan
@@ -60,7 +73,8 @@ public record Need
     [JsonPropertyName("missing")] public int Missing { get; set; }
     [JsonPropertyName("fir")] public bool Fir { get; init; }
     [JsonPropertyName("tool")] public bool Tool { get; init; }
-    // "ok", "buy", "partial", "craft", "money", "none" (FIR with no unlocked craft), "unavailable" or "later" (future level)
+    // "ok", "buy", "partial", "craft", "craftable" (FIR with a usable recipe, not planned), "money", "none" (FIR with no unlocked craft),
+    // "unavailable" or "later" (future level)
     [JsonPropertyName("plan")] public string Plan { get; set; } = "none";
 }
 

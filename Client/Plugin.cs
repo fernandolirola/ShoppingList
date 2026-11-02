@@ -11,14 +11,13 @@ using EFT.Hideout;
 using EFT.InventoryLogic;
 using HarmonyLib;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using SPT.Common.Http;
 using SPT.Reflection.Utils;
 using UnityEngine;
 
 namespace ShoppingList.Client;
 
-[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.1.4")]
+[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.2.0")]
 public partial class Plugin : BaseUnityPlugin
 {
     internal static ManualLogSource Log = null!;
@@ -27,8 +26,13 @@ public partial class Plugin : BaseUnityPlugin
     private ConfigEntry<bool> _portuguese = null!;
     private ConfigEntry<bool> _crafts = null!;
     private ConfigEntry<KeyboardShortcut> _hotkey = null!;
-    private ConfigEntry<bool> _future = null!;
+    private ConfigEntry<string> _targetState = null!;
     private ConfigEntry<SortMode> _sort = null!;
+    private ConfigEntry<int> _priceLimit = null!;
+    private ConfigEntry<bool> _autoRetry = null!;
+    private ConfigEntry<bool> _hideReady = null!;
+    private ConfigEntry<string> _skippedState = null!;
+    private ConfigEntry<string> _collapsedState = null!;
 
     private AreaScreenSubstrate? _areaScreen;
     private HideoutScreenOverlay? _overlay;
@@ -44,6 +48,8 @@ public partial class Plugin : BaseUnityPlugin
     private PlanResponse? _plan;
     private PlanResponse? _raw;
     private readonly HashSet<string> _skipped = new();
+    // Areas planned past their next level; the others stop at the next one
+    private readonly Dictionary<int, int> _targets = new();
     private bool _busy;
     private string _status = "";
     private Rect _window = new(0, 0, W, H);
@@ -57,8 +63,22 @@ public partial class Plugin : BaseUnityPlugin
         _crafts = Config.Bind("General", "Buy craft ingredients", true, "For found-in-raid items with an unlocked craft, buy that craft's ingredients");
         // New key name so existing configs drop Ctrl+L, which inspects the weapon in raid
         _hotkey = Config.Bind("General", "Open key", new KeyboardShortcut(KeyCode.RightBracket), "Opens the shopping list in the hideout, or in raid while the inventory is open");
-        _future = Config.Bind("General", "Show future upgrades", false, "Also list the levels after the next one");
         _sort = Config.Bind("General", "Sort by", SortMode.Default, "How the areas in the list are sorted");
+        _priceLimit = Config.Bind("General", "Retry price limit %", 10, new ConfigDescription("When an offer sells out while buying, a replacement is only bought automatically if it costs at most this much more. Pricier ones wait for Try again", new AcceptableValueRange<int>(0, 100)));
+        _autoRetry = Config.Bind("General", "Retry sold-out offers automatically", true, "When an offer sells out while buying, buy the next one within the retry price limit. Off: stop and let you choose Retry or Skip");
+        _hideReady = Config.Bind("General", "Hide ready items", false, "Hide requirements you already have");
+        // Kept between sessions, but not shown in the configuration manager
+        var hidden = new ConfigurationManagerAttributes { Browsable = false };
+        _skippedState = Config.Bind("State", "Skipped items", "", new ConfigDescription("Items unticked in the list", null, hidden));
+        _collapsedState = Config.Bind("State", "Folded sections", "", new ConfigDescription("Areas and crafts folded in the list", null, hidden));
+        _skipped.UnionWith(_skippedState.Value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries));
+        _collapsed.UnionWith(_collapsedState.Value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries));
+        _targetState = Config.Bind("State", "Target levels", "", new ConfigDescription("Areas planned past their next level, as type:level", null, hidden));
+        foreach (var pair in _targetState.Value.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = pair.Split(':');
+            if (parts.Length == 2 && int.TryParse(parts[0], out var type) && int.TryParse(parts[1], out var level)) _targets[type] = level;
+        }
         new Harmony("com.zezinho.shoppinglist").PatchAll(typeof(ScrollPatch));
     }
 
@@ -223,7 +243,14 @@ public partial class Plugin : BaseUnityPlugin
 
         _lastToggle = Time.unscaledTime;
         _open = true;
+        // Reopened while buying: show the running review instead of re-planning under it
+        if (_run is { Running: true })
+        {
+            return;
+        }
+
         _focusArea = area;
+        _order = null;
         _status = "";
         _confirming = false;
         _scroll = Vector2.zero;
@@ -273,6 +300,7 @@ public partial class Plugin : BaseUnityPlugin
     // The server sends one operation per purchase, in the same order, so unticked items are dropped pairwise
     private void ApplySkips()
     {
+        _skippedState.Value = string.Join(",", _skipped.OrderBy(t => t).ToArray());
         if (_raw is null)
         {
             _plan = null;
@@ -300,7 +328,7 @@ public partial class Plugin : BaseUnityPlugin
     private async Task<PlanResponse> RequestPlan()
     {
         var areas = _focusArea is { } one ? new List<int> { one } : _selected?.ToList() ?? new List<int>();
-        var body = JsonConvert.SerializeObject(new { areas, excludeAll = _focusArea is null && _selected is { Count: 0 }, crafts = _crafts.Value, future = _future.Value, overview = _focusArea is null, raid = InRaid });
+        var body = JsonConvert.SerializeObject(new { areas, excludeAll = _focusArea is null && _selected is { Count: 0 }, crafts = _crafts.Value, targets = _targets, overview = _focusArea is null, raid = InRaid });
         var json = await RequestHandler.PostJsonAsync("/shoppinglist/plan", body);
         return JsonConvert.DeserializeObject<PlanResponse>(json) ?? new PlanResponse();
     }
@@ -333,7 +361,7 @@ public partial class Plugin : BaseUnityPlugin
         }
 
         static Need Copy(Need n) => new() { Tpl = n.Tpl, Required = n.Required, Have = n.Have, Donated = n.Donated, Missing = n.Missing, Fir = n.Fir, Tool = n.Tool, Plan = n.Plan, Rarity = n.Rarity };
-        static AreaPlan CopyArea(AreaPlan a) => new() { Type = a.Type, Level = a.Level, Ready = a.Ready, Items = a.Items.Select(Copy).ToList() };
+        static AreaPlan CopyArea(AreaPlan a) => new() { Type = a.Type, Level = a.Level, Ready = a.Ready, MaxLevel = a.MaxLevel, Locks = a.Locks, Items = a.Items.Select(Copy).ToList() };
 
         var areas = stashPlan.Areas.Select(CopyArea).ToList();
         var future = stashPlan.Future.Select(CopyArea).ToList();
@@ -352,89 +380,6 @@ public partial class Plugin : BaseUnityPlugin
             AvailableAreas = stashPlan.AvailableAreas, Error = stashPlan.Error, Areas = areas, Future = future, Crafts = stashPlan.Crafts, Purchases = stashPlan.Purchases, Operations = stashPlan.Operations,
             Unavailable = stashPlan.Unavailable, Cost = stashPlan.Cost, Money = stashPlan.Money, TotalRub = stashPlan.TotalRub, FleaUnlocked = stashPlan.FleaUnlocked,
         };
-    }
-
-    private async void Buy()
-    {
-        if (InRaid || ClientAppUtils.GetClientApp()?.Session is not ClientBackendSession session || _plan is null)
-        {
-            return;
-        }
-
-        _busy = true;
-        int bought = 0, failed = 0;
-        string? lastError = null;
-        try
-        {
-            // Offers can sell out between planning and buying, so leftovers get a fresh plan
-            for (int round = 0; round < 3 && _plan.Operations.Count > 0; round++)
-            {
-                int roundFailed = 0;
-                foreach (var op in _plan.Operations)
-                {
-                    _status = T($"Buying... {bought + 1}", $"Comprando... {bought + 1}");
-                    var result = await Send(session, op);
-                    if (result.Succeed)
-                    {
-                        bought++;
-                    }
-                    else
-                    {
-                        roundFailed++;
-                        lastError = result.Error;
-                        if (result.Error?.IndexOf("space", StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            round = 3;
-                            break;
-                        }
-                    }
-                }
-
-                failed += roundFailed;
-                _raw = await RequestPlan();
-                ApplySkips();
-                if (roundFailed == 0)
-                {
-                    break;
-                }
-            }
-
-            _status = lastError is null
-                ? T($"Done: {bought} purchase{(bought == 1 ? "" : "s")}", $"Pronto: {bought} compra{(bought == 1 ? "" : "s")}")
-                : T($"{bought} purchases, last error: {lastError}", $"{bought} compras, último erro: {lastError}");
-        }
-        catch (Exception ex)
-        {
-            _status = ex.Message;
-            Log.LogError(ex);
-        }
-        finally
-        {
-            _busy = false;
-            _signatureKnown = false;
-            // Back to the list, which was re-planned after the purchases, so the progress shows
-            _confirming = false;
-            _scroll = Vector2.zero;
-        }
-    }
-
-    private static async Task<IResult> Send(ClientBackendSession session, JObject op)
-    {
-        // Continuing inside the game's callback would queue the next purchase before the game finishes
-        // handling this one, and a warning there clears its queue, losing that purchase
-        var source = new TaskCompletionSource<IResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-        session.SendOperationRightNow(op, result => source.TrySetResult(result));
-        var finished = await Task.WhenAny(source.Task, Task.Delay(20000));
-        await Task.Yield();
-        return finished == source.Task ? source.Task.Result : new FailedResult("Timed out");
-    }
-
-    private sealed class FailedResult(string error) : IResult
-    {
-        public string Error => error;
-        public bool Succeed => false;
-        public bool Failed => true;
-        public int ErrorCode => 0;
     }
 
     private void OnGUI()
@@ -467,6 +412,12 @@ public partial class Plugin : BaseUnityPlugin
             Toggle(null);
         }
 
+        if (_open && Event.current.type == EventType.KeyDown && Event.current.keyCode == KeyCode.Escape)
+        {
+            _open = false;
+            Event.current.Use();
+        }
+
         if (_open)
         {
             _window = GUI.Window(0x5A5A, _window, DrawWindow, GUIContent.none, _ui.Plain);
@@ -475,7 +426,37 @@ public partial class Plugin : BaseUnityPlugin
         GUI.matrix = matrix;
     }
 
-    private static string Name(string tpl) => (tpl + " ShortName").Localized();
+    private static string Name(string tpl) => Clean((tpl + " ShortName").Localized());
+
+    // Other mods mark needed items with stars in their names; the list shows what they are for already
+    private static string Clean(string name) => name.TrimStart('★', '☆', ' ');
+
+    private static string TraderName(string id) => (id + " Nickname").Localized();
+
+    // Opens an area's window the way clicking it in the hideout's area list does, with the list closed so it shows
+    private void GoToArea(int type)
+    {
+        if (_overlay == null || !Singleton<HideoutRepresentation>.Instantiated) return;
+        var data = Singleton<HideoutRepresentation>.Instance.AreaDatas.FirstOrDefault(a => (int)a.Template.Type == type);
+        if (data == null) return;
+        _open = false;
+        _overlay.AreaSelected(data, true).ContinueWith(t => Log.LogError(t.Exception), TaskContinuationOptions.OnlyOnFaulted);
+    }
+
+    private HashSet<string> _sameName = new();
+    private PlanResponse? _sameNameFrom;
+
+    // Short name, or the full one when another listed item shares the short name (the Christmas ornaments)
+    private string ListName(string tpl)
+    {
+        if (_raw != _sameNameFrom)
+        {
+            _sameNameFrom = _raw;
+            _sameName = new HashSet<string>(WantedTpls().GroupBy(Name).Where(g => g.Count() > 1).SelectMany(g => g));
+        }
+
+        return _sameName.Contains(tpl) ? Clean((tpl + " Name").Localized()) : Name(tpl);
+    }
 
     private static string Currency(string tpl) => tpl switch
     {
@@ -484,4 +465,10 @@ public partial class Plugin : BaseUnityPlugin
         "569668774bdc2da2298b4568" => "€",
         _ => Name(tpl),
     };
+}
+
+// Read by name through reflection by the BepInEx configuration manager
+internal sealed class ConfigurationManagerAttributes
+{
+    public bool? Browsable;
 }

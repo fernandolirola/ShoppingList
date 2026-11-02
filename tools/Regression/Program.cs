@@ -47,9 +47,18 @@ Check(Count(false) == 0, "locked upgrade not automatically purchased");
 Check(Count(true) == 1, "overview includes locked next upgrade");
 Check(Count(false, [19]) == 1, "locked upgrade can be explicitly selected");
 Check(Count(false, [-1]) == 0, "empty selection plans no purchases");
-var future = new PlanResponse();
-typeof(Planner).GetMethod("PlanFuture", flags)!.Invoke(Create(), [Profile(0), new PlanRequest { Future = true, Overview = true }, future, new Dictionary<MongoId,int>(), new Dictionary<MongoId,int>()]);
-Check(future.Future.Count == 1 && future.Future[0].Level == 2, "locked next upgrade not duplicated among future levels");
+PlanResponse Future(int type, int next, Dictionary<int, int> targets) {
+ var response = new PlanResponse();
+ response.Areas.Add(new AreaPlan { Type = type, Level = next });
+ typeof(Planner).GetMethod("PlanFuture", flags)!.Invoke(Create(), [Profile(next - 1), new PlanRequest { Targets = targets }, response, new Dictionary<MongoId,int>(), new Dictionary<MongoId,int>(), new Dictionary<MongoId,(int, int)>()]);
+ return response;
+}
+var future = Future(19, 1, new() { [19] = 2 });
+Check(future.Future.Count == 1 && future.Future[0].Level == 2, "target level plans the levels after the next one");
+Check(Future(19, 1, new()).Future.Count == 0, "no target stops at the next level");
+Check(Future(19, 1, new() { [19] = 9 }).Future.Count == 1, "target above the last level stops at the last level");
+var maxLevel = typeof(Planner).GetMethod("MaxLevel", BindingFlags.NonPublic | BindingFlags.Static)!;
+Check((int)maxLevel.Invoke(null, [table.Areas.Single()])! == 2, "max level is the last manual stage");
 Check(((IEnumerable)select.Invoke(Create(), [Profile(0, true), null, true])!).Cast<object>().Count() == 0, "construction excluded from next-upgrade catalog");
 Check(((IEnumerable)select.Invoke(Create(), [Profile(2), null, true])!).Cast<object>().Count() == 0, "maxed area excluded from next-upgrade catalog");
 table = JsonSerializer.Deserialize<HideoutTable>("""
@@ -57,9 +66,19 @@ table = JsonSerializer.Deserialize<HideoutTable>("""
 """, options)!;
 Check(Count(true) == 0, "automatic storage stage hidden from overview");
 Check(Count(false, [25]) == 0, "explicit selection cannot add automatic storage stage");
-future = new PlanResponse();
-typeof(Planner).GetMethod("PlanFuture", flags)!.Invoke(Create(), [Profile(0), new PlanRequest { Future = true, Overview = true }, future, new Dictionary<MongoId,int>(), new Dictionary<MongoId,int>()]);
-Check(future.Future.Count == 0, "automatic storage stages hidden from future upgrades");
+Check(Future(25, 1, new() { [25] = 2 }).Future.Count == 0, "automatic storage stages hidden from future upgrades");
+Check((int)maxLevel.Invoke(null, [table.Areas.Single()])! == 0, "automatic stages do not count toward max level");
+var foreign = typeof(Planner).GetMethod("IsForeignCurrency", BindingFlags.NonPublic | BindingFlags.Static)!;
+Check((bool)foreign.Invoke(null, [new MongoId("5696686a4bdc2da3298b456a")])! && (bool)foreign.Invoke(null, [new MongoId("569668774bdc2da2298b4568")])!, "dollars and euros can be bought");
+Check(!(bool)foreign.Invoke(null, [new MongoId("5449016a4bdc2d6f028b456f")])!, "roubles are never bought");
+var order = new PlanResponse();
+foreach (var t in new[] { tpl, "5696686a4bdc2da3298b456a" })
+{
+ order.Purchases.Add(new Purchase { Tpl = t, Count = 1 });
+ order.Operations.Add(new Dictionary<string, object> { ["tpl"] = t });
+}
+typeof(Planner).GetMethod("BuyCurrencyForPurchases", flags)!.Invoke(Create(), [order, null, new Dictionary<MongoId,int>(), new Dictionary<MongoId,int>()]);
+Check(order.Purchases[0].Tpl == "5696686a4bdc2da3298b456a" && (string)order.Operations[0]["tpl"] == order.Purchases[0].Tpl, "currency is bought first, with its operation");
 Console.WriteLine($"{checks} regression checks passed");
 
 

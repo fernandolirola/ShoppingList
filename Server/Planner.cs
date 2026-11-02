@@ -7,6 +7,7 @@ using SPTarkov.Server.Core.Models.Common;
 using SPTarkov.Server.Core.Models.Eft.Common;
 using SPTarkov.Server.Core.Models.Eft.Common.Tables;
 using SPTarkov.Server.Core.Models.Eft.Hideout;
+using SPTarkov.Server.Core.Models.Eft.Ragfair;
 using SPTarkov.Server.Core.Models.Enums;
 using SPTarkov.Server.Core.Models.Spt.Config;
 using SPTarkov.Server.Core.Models.Spt.Tables;
@@ -55,7 +56,7 @@ public sealed class Planner(
         {
             foreach (var (area, stage, level, ready) in SelectAreas(pmc, null, all: true))
             {
-                var preview = new AreaPlan { Type = (int)area.Type!.Value, Level = level, Ready = ready };
+                var preview = new AreaPlan { Type = (int)area.Type!.Value, Level = level, Ready = ready, MaxLevel = MaxLevel(area), Locks = Locks(pmc, area, level) };
                 // Each unticked area previews the stash independently; it reserves no items or purchases.
                 var previewFir = new Dictionary<MongoId, int>(firHave);
                 var previewNonFir = anyHave.ToDictionary(kv => kv.Key, kv => kv.Value - firHave.GetValueOrDefault(kv.Key));
@@ -77,7 +78,7 @@ public sealed class Planner(
 
         foreach (var (area, stage, level, ready) in SelectAreas(pmc, request.ExcludeAll ? [-1] : request.Areas))
         {
-            var plan = new AreaPlan { Type = (int)area.Type!.Value, Level = level, Ready = ready };
+            var plan = new AreaPlan { Type = (int)area.Type!.Value, Level = level, Ready = ready, MaxLevel = MaxLevel(area), Locks = Locks(pmc, area, level) };
             response.Areas.Add(plan);
             var donated = donations.GetValueOrDefault(plan.Type);
             foreach (var req in (stage.Requirements ?? []).Where(r => r.Type == "Item"))
@@ -110,7 +111,7 @@ public sealed class Planner(
             {
                 need.Plan = "ok";
             }
-            else if (paymentHelper.IsMoneyTpl(tpl))
+            else if (paymentHelper.IsMoneyTpl(tpl) && !IsForeignCurrency(tpl))
             {
                 need.Plan = "money";
             }
@@ -128,10 +129,16 @@ public sealed class Planner(
             {
                 firToCraft[tpl] = firToCraft.GetValueOrDefault(tpl) + missing;
             }
+            else if (Recipes(pmc, tpl).Count > 0)
+            {
+                // Nothing is bought for it, but the list still tells it apart from items you can only find
+                need.Plan = "craftable";
+            }
         }
 
         var offers = new Dictionary<MongoId, List<Offer>>();
-        List<Offer> OffersFor(MongoId tpl) => offers.TryGetValue(tpl, out var list) ? list : offers[tpl] = request.Raid ? [] : FindOffers(sessionId, pmc, tpl, response.FleaUnlocked);
+        var market = new Market();
+        List<Offer> OffersFor(MongoId tpl) => offers.TryGetValue(tpl, out var list) ? list : offers[tpl] = request.Raid ? [] : FindOffers(sessionId, pmc, tpl, response.FleaUnlocked, market);
 
         foreach (var (tpl, missing) in firToCraft)
         {
@@ -153,12 +160,14 @@ public sealed class Planner(
             }
         }
 
-        if (request.Future)
+        PlanFuture(pmc, request, response, firPool, nonFirPool, toBuy);
+
+        if (!request.Raid)
         {
-            PlanFuture(pmc, request, response, firPool, nonFirPool);
+            BuildPurchases(response, toBuy, OffersFor, areaNeeds.Select(n => n.need).Concat(response.Crafts.SelectMany(c => c.Ingredients)).Concat(response.Future.SelectMany(a => a.Items)));
+            BuyCurrencyForPurchases(response, OffersFor, firPool, nonFirPool);
         }
 
-        if (!request.Raid) BuildPurchases(response, toBuy, OffersFor, areaNeeds.Select(n => n.need).Concat(response.Crafts.SelectMany(c => c.Ingredients)));
         foreach (var money in Money.GetMoneyTpls())
         {
             response.Money[money.ToString()] = anyHave.GetValueOrDefault(money);
@@ -167,54 +176,38 @@ public sealed class Planner(
         return response;
     }
 
-    // Later levels only show what the stash covers after the current plan, nothing is bought for them
-    private void PlanFuture(PmcData pmc, PlanRequest request, PlanResponse response, Dictionary<MongoId, int> firPool, Dictionary<MongoId, int> nonFirPool)
+    // Levels past the next one, up to each area's target. They run after the next levels and crafts,
+    // so the stash goes to the nearest upgrade first
+    private void PlanFuture(PmcData pmc, PlanRequest request, PlanResponse response, Dictionary<MongoId, int> firPool, Dictionary<MongoId, int> nonFirPool,
+        Dictionary<MongoId, (int any, int fir)> toBuy)
     {
-        var current = response.Areas.ToDictionary(a => a.Type, a => a.Level);
+        bool FirBuyable() => traderConfig.PurchasesAreFoundInRaid || ragfairConfig.Dynamic.PurchasesAreFoundInRaid;
         var levels = new List<(HideoutArea area, int level)>();
-        foreach (var area in hideoutTable.Areas)
+        foreach (var next in response.Areas)
         {
-            if (area.Type is null || area.IsEnabled == false || area.Stages is null)
+            int target = request.Targets?.GetValueOrDefault(next.Type) ?? 0;
+            var area = hideoutTable.Areas.FirstOrDefault(a => a.Type is { } t && (int)t == next.Type);
+            for (int level = next.Level + 1; level <= target && area?.Stages?.GetValueOrDefault(level.ToString()) is { } stage; level++)
             {
-                continue;
-            }
-
-            int type = (int)area.Type.Value;
-            var profileArea = pmc.Hideout?.Areas?.FirstOrDefault(a => a.Type == area.Type);
-            bool constructing = profileArea?.Constructing == true;
-            int built = (profileArea?.Level ?? 0) + (constructing ? 1 : 0);
-            bool wanted = request.Areas?.Contains(type) == true;
-            int from;
-            if (current.TryGetValue(type, out var next))
-            {
-                from = next + 1;
-            }
-            else if (constructing ? request.Overview || wanted : request.Overview && !wanted && !IsReady(pmc, area, built + 1))
-            {
-                // Unticked areas stay out; the overview adds areas still locked behind other upgrades
-                from = built + (constructing ? 1 : 2);
-            }
-            else
-            {
-                continue;
-            }
-
-            for (int level = from; area.Stages.ContainsKey(level.ToString()); level++)
-            {
-                if (IsManualStage(area.Stages[level.ToString()])) levels.Add((area, level));
+                if (IsManualStage(stage)) levels.Add((area, level));
             }
         }
 
         foreach (var (area, level) in levels.OrderBy(l => l.level))
         {
-            var plan = new AreaPlan { Type = (int)area.Type!.Value, Level = level };
+            var plan = new AreaPlan { Type = (int)area.Type!.Value, Level = level, Ready = IsReady(pmc, area, level), MaxLevel = MaxLevel(area), Locks = Locks(pmc, area, level) };
             foreach (var req in (area.Stages![level.ToString()].Requirements ?? []).Where(r => r.Type == "Item"))
             {
                 var tpl = req.TemplateId;
                 var need = new Need { Tpl = tpl.ToString(), Required = req.Count ?? 0, Fir = req.IsSpawnedInSession == true, Rarity = Rarity(tpl) };
                 need.Missing = need.Fir ? Take(firPool, tpl, need.Required) : Take(nonFirPool, tpl, Take(firPool, tpl, need.Required));
                 need.Have = need.Required - need.Missing;
-                need.Plan = need.Missing == 0 ? "ok" : paymentHelper.IsMoneyTpl(tpl) ? "money" : need.Fir ? "none" : "later";
+                need.Plan = need.Missing == 0 ? "ok" : paymentHelper.IsMoneyTpl(tpl) && !IsForeignCurrency(tpl) ? "money" : need.Fir && !FirBuyable() ? (Recipes(pmc, tpl).Count > 0 ? "craftable" : "none") : "buy";
+                if (need.Plan == "buy")
+                {
+                    Add(toBuy, tpl, need.Missing, need.Fir);
+                }
+
                 plan.Items.Add(need);
             }
 
@@ -225,6 +218,75 @@ public sealed class Planner(
     }
 
     private static bool IsManualStage(Stage stage) => stage.AutoUpgrade != true;
+
+    private static readonly HashSet<string> ForeignCurrencies = ["5696686a4bdc2da3298b456a", "569668774bdc2da2298b4568"];
+
+    // Dollars and euros: traders sell them for roubles, so they are bought like items
+    private static bool IsForeignCurrency(MongoId tpl) => ForeignCurrencies.Contains(tpl.ToString());
+
+    // Items priced in dollars or euros need that currency on hand. What the stash lacks after the upgrades took
+    // theirs is bought too, and every currency purchase goes first so the later trades can pay
+    private void BuyCurrencyForPurchases(PlanResponse response, Func<MongoId, List<Offer>> offersFor, Dictionary<MongoId, int> firPool, Dictionary<MongoId, int> nonFirPool)
+    {
+        var extra = new PlanResponse();
+        foreach (var currency in ForeignCurrencies.Select(c => new MongoId(c)))
+        {
+            long cost = response.Cost.GetValueOrDefault(currency.ToString());
+            long left = nonFirPool.GetValueOrDefault(currency) + firPool.GetValueOrDefault(currency);
+            if (cost > left)
+            {
+                BuildPurchases(extra, new Dictionary<MongoId, (int any, int fir)> { [currency] = ((int)(cost - left), 0) }, offersFor, []);
+            }
+        }
+
+        response.Purchases.AddRange(extra.Purchases);
+        response.Operations.AddRange(extra.Operations);
+        response.Unavailable.AddRange(extra.Unavailable);
+        foreach (var (key, value) in extra.Cost)
+        {
+            response.Cost[key] = response.Cost.GetValueOrDefault(key) + value;
+        }
+
+        response.TotalRub += extra.TotalRub;
+
+        // Purchases and operations are paired by index, so they move together
+        var pairs = response.Purchases.Zip(response.Operations).OrderBy(p => ForeignCurrencies.Contains(p.First.Tpl) ? 0 : 1).ToList();
+        response.Purchases.Clear();
+        response.Operations.Clear();
+        foreach (var (purchase, operation) in pairs)
+        {
+            response.Purchases.Add(purchase);
+            response.Operations.Add(operation);
+        }
+    }
+
+    // The Christmas tree stays in the hideout table all year, but the game only shows it while the Christmas event is on
+    private const int ChristmasTree = 21;
+
+    private bool OutOfSeason(HideoutArea area) =>
+        (int)area.Type!.Value == ChristmasTree && globalTable.Configuration?.EventType?.Contains(EventType.Christmas) != true;
+
+    private static int MaxLevel(HideoutArea area) =>
+        (area.Stages ?? []).Where(s => IsManualStage(s.Value) && int.TryParse(s.Key, out _)).Select(s => int.Parse(s.Key)).DefaultIfEmpty(0).Max();
+
+    // Area levels and trader loyalty the profile does not have yet; skills are not checked, like IsReady
+    private static List<Lock> Locks(PmcData pmc, HideoutArea area, int level)
+    {
+        var locks = new List<Lock>();
+        foreach (var r in area.Stages?.GetValueOrDefault(level.ToString())?.Requirements ?? [])
+        {
+            if (r.Type == "Area" && (pmc.Hideout?.Areas?.FirstOrDefault(a => (int)a.Type == r.AreaType)?.Level ?? 0) < (r.RequiredLevel ?? 0))
+            {
+                locks.Add(new Lock { Kind = "area", Area = r.AreaType ?? 0, Level = r.RequiredLevel ?? 0 });
+            }
+            else if (r.Type == "TraderLoyalty" && (pmc.TradersInfo?.GetValueOrDefault(r.TraderId)?.LoyaltyLevel ?? 0) < (r.LoyaltyLevel ?? 0))
+            {
+                locks.Add(new Lock { Kind = "trader", Trader = r.TraderId.ToString(), Level = r.LoyaltyLevel ?? 0 });
+            }
+        }
+
+        return locks;
+    }
 
     private static bool IsReady(PmcData pmc, HideoutArea area, int level) =>
         area.Stages?.GetValueOrDefault(level.ToString()) is { } stage && (stage.Requirements ?? []).All(r => r.Type switch
@@ -266,7 +328,7 @@ public sealed class Planner(
     {
         foreach (var area in hideoutTable.Areas)
         {
-            if (area.Type is null || area.IsEnabled == false)
+            if (area.Type is null || area.IsEnabled == false || OutOfSeason(area))
             {
                 continue;
             }
@@ -288,15 +350,21 @@ public sealed class Planner(
         }
     }
 
-    private CraftPlan? PlanCraft(PmcData pmc, MongoId tpl, int missing, Dictionary<MongoId, int> firPool, Dictionary<MongoId, int> nonFirPool, Func<MongoId, List<Offer>> offersFor)
+    // Recipes for the item that the profile can run now: unlocked, station built and at the required level
+    private List<HideoutProduction> Recipes(PmcData pmc, MongoId tpl)
     {
         var unlocked = pmc.UnlockedInfo?.UnlockedProductionRecipe ?? [];
-        var candidates = (hideoutTable.Production.Recipes ?? [])
+        return (hideoutTable.Production.Recipes ?? [])
             .Where(r => r.AreaType is not null && (pmc.Hideout?.Areas?.FirstOrDefault(a => (int)a.Type == (int)r.AreaType.Value)?.Level ?? 0) > 0)
             .Where(r => r.EndProduct == tpl && r.Continuous != true && r.IsCodeProduction != true && (r.Locked != true || unlocked.Contains(r.Id)))
             .Where(r => (r.Requirements ?? []).Where(q => q.Type == "Area").All(q =>
                 (pmc.Hideout?.Areas?.FirstOrDefault(a => (int)a.Type == q.AreaType)?.Level ?? 0) >= (q.RequiredLevel ?? 0)))
             .ToList();
+    }
+
+    private CraftPlan? PlanCraft(PmcData pmc, MongoId tpl, int missing, Dictionary<MongoId, int> firPool, Dictionary<MongoId, int> nonFirPool, Func<MongoId, List<Offer>> offersFor)
+    {
+        var candidates = Recipes(pmc, tpl);
 
         CraftPlan? best = null;
         double bestCost = double.MaxValue;
@@ -409,7 +477,15 @@ public sealed class Planner(
         }
     }
 
-    private List<Offer> FindOffers(MongoId sessionId, PmcData pmc, MongoId tpl, bool fleaUnlocked)
+    // Trader stock and the flea index, built once per plan: GetAssort rebuilds a trader's whole stock on every call,
+    // and the flea holds thousands of offers, so asking per item made big plans slow
+    private sealed class Market
+    {
+        public readonly Dictionary<MongoId, (TraderAssort assort, ILookup<MongoId, Item> byTpl, HashSet<string> parents)?> Traders = new();
+        public ILookup<MongoId, RagfairOffer>? Flea;
+    }
+
+    private List<Offer> FindOffers(MongoId sessionId, PmcData pmc, MongoId tpl, bool fleaUnlocked, Market market)
     {
         var result = new List<Offer>();
         foreach (var traderId in tradersTable.Keys)
@@ -421,12 +497,27 @@ public sealed class Planner(
 
             try
             {
-                var assort = traderAssortHelper.GetAssort(sessionId, traderId);
-                foreach (var item in assort.Items.Where(i => i.Template == tpl && i.ParentId == "hideout"))
+                if (!market.Traders.TryGetValue(traderId, out var stock))
                 {
-                    if (assort.Items.Any(i => i.ParentId == item.Id.ToString())
+                    // Null when the trader failed, so it is not retried for every item
+                    market.Traders[traderId] = null;
+                    var full = traderAssortHelper.GetAssort(sessionId, traderId);
+                    market.Traders[traderId] = stock = (full, full.Items.Where(i => i.ParentId == "hideout").ToLookup(i => i.Template),
+                        new HashSet<string>(full.Items.Where(i => i.ParentId is not null).Select(i => i.ParentId!)));
+                }
+
+                if (stock is not { } found)
+                {
+                    continue;
+                }
+
+                var (assort, byTpl, parents) = found;
+
+                foreach (var item in byTpl[tpl])
+                {
+                    if (parents.Contains(item.Id.ToString())
                         || assort.LoyalLevelItems.GetValueOrDefault(item.Id, 1) > (info.LoyaltyLevel ?? 1)
-                        || assort.BarterScheme.GetValueOrDefault(item.Id)?.FirstOrDefault() is not [{ } pay] || !paymentHelper.IsMoneyTpl(pay.Template))
+                        || assort.BarterScheme.GetValueOrDefault(item.Id)?.FirstOrDefault() is not [{ } pay] || !paymentHelper.IsMoneyTpl(pay.Template) || pay.Template == tpl)
                     {
                         continue;
                     }
@@ -456,7 +547,8 @@ public sealed class Planner(
             return result;
         }
 
-        foreach (var offer in ragfairOfferService.GetOffers())
+        market.Flea ??= ragfairOfferService.GetOffers().Where(o => o.Items is [_]).ToLookup(o => o.Items![0].Template);
+        foreach (var offer in market.Flea[tpl])
         {
             if (offer.Items is not [{ } item] || item.Template != tpl || offer.SellInOnePiece == true || offer.Locked == true
                 || offer.User.Id == pmc.Id || offer.Quantity <= 0

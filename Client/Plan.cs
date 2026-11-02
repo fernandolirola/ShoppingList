@@ -25,7 +25,17 @@ public class AreaPlan
     [JsonProperty("type")] public int Type;
     [JsonProperty("level")] public int Level;
     [JsonProperty("ready")] public bool Ready;
+    [JsonProperty("maxLevel")] public int MaxLevel;
+    [JsonProperty("locks")] public List<Lock> Locks = new();
     [JsonProperty("items")] public List<Need> Items = new();
+}
+
+public class Lock
+{
+    [JsonProperty("kind")] public string Kind = "";
+    [JsonProperty("area")] public int Area;
+    [JsonProperty("trader")] public string Trader = "";
+    [JsonProperty("level")] public int Level;
 }
 
 public class CraftPlan
@@ -56,6 +66,7 @@ public class Purchase
     [JsonProperty("tpl")] public string Tpl = "";
     [JsonProperty("count")] public int Count;
     [JsonProperty("source")] public string Source = "";
+    [JsonProperty("trader")] public string Trader = "";
     [JsonProperty("currency")] public string Currency = "";
     [JsonProperty("price")] public long Price;
     [JsonProperty("rub")] public long Rub;

@@ -20,7 +20,11 @@ internal sealed class IconCache
             _icons[tpl] = icon = Load(tpl);
         }
 
-        var sprite = icon?.Sprite;
+        DrawSprite(rect, icon?.Sprite);
+    }
+
+    public static void DrawSprite(Rect rect, Sprite? sprite)
+    {
         if (sprite == null || sprite.texture == null)
         {
             return;
