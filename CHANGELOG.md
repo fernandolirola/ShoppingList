@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.2
+
+- The Shopping list button now sits with the other hideout buttons when Vertical Hideout is installed, instead of on top of the area list. Thanks to Recker for reporting it.
+
 ## 1.2.1
 
 - The Shopping list button no longer shows on areas that cannot be upgraded any more, such as the Library and the Cultist Circle.

@@ -24,7 +24,8 @@ internal sealed class ToolbarButton
     // Called every frame while the hideout overlay is around; builds the button once, then mirrors the template's visibility
     public void Sync(HideoutScreenOverlay overlay, Func<string> tooltip, Action onClick)
     {
-        if (_failed)
+        // Not before the overlay is first shown: mods like Vertical Hideout rearrange its buttons in its Awake, which runs then
+        if (_failed || (_button == null && !overlay.isActiveAndEnabled))
         {
             return;
         }
