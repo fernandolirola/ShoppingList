@@ -17,7 +17,7 @@ using UnityEngine;
 
 namespace ShoppingList.Client;
 
-[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.2.3")]
+[BepInPlugin("com.zezinho.shoppinglist", "zezinho-ShoppingList", "1.2.4")]
 public partial class Plugin : BaseUnityPlugin
 {
     internal static ManualLogSource Log = null!;

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.4
+
+- With BetterFlea, items no longer show as "Not for sale" or "Partly for sale" when the flea has offers for them.
+
 ## 1.2.3
 
 - The hideout toolbar button's blue highlight now follows whether the window is open, so closing the window with Esc or another control clears it too.
