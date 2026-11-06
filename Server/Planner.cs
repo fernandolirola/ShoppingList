@@ -35,6 +35,7 @@ public sealed class Planner(
     TraderConfig traderConfig,
     RagfairConfig ragfairConfig,
     HideoutInProgressReader hideoutInProgress,
+    BetterFleaFill betterFlea,
     ISptLogger<Planner> logger)
 {
     private readonly Dictionary<MongoId, int> _rarity = new();
@@ -136,6 +137,11 @@ public sealed class Planner(
             }
         }
 
+        if (response.FleaUnlocked && !request.Raid)
+        {
+            betterFlea.Fill(FleaCandidates(pmc, request, response, toBuy.Keys, firToCraft.Keys));
+        }
+
         var offers = new Dictionary<MongoId, List<Offer>>();
         var market = new Market();
         List<Offer> OffersFor(MongoId tpl) => offers.TryGetValue(tpl, out var list) ? list : offers[tpl] = request.Raid ? [] : FindOffers(sessionId, pmc, tpl, response.FleaUnlocked, market);
@@ -174,6 +180,36 @@ public sealed class Planner(
         }
 
         return response;
+    }
+
+    // Everything the plan may look up on the flea: next levels, craft ingredients and later levels
+    private IEnumerable<MongoId> FleaCandidates(PmcData pmc, PlanRequest request, PlanResponse response, IEnumerable<MongoId> toBuy, IEnumerable<MongoId> toCraft)
+    {
+        foreach (var tpl in toBuy)
+        {
+            yield return tpl;
+        }
+
+        foreach (var recipe in toCraft.SelectMany(tpl => Recipes(pmc, tpl)))
+        {
+            foreach (var req in (recipe.Requirements ?? []).Where(q => q.Type is "Item" or "Tool" && q.TemplateId is not null))
+            {
+                yield return req.TemplateId!.Value;
+            }
+        }
+
+        foreach (var next in response.Areas)
+        {
+            int target = request.Targets?.GetValueOrDefault(next.Type) ?? 0;
+            var area = hideoutTable.Areas.FirstOrDefault(a => a.Type is { } t && (int)t == next.Type);
+            for (int level = next.Level + 1; level <= target && area?.Stages?.GetValueOrDefault(level.ToString()) is { } stage; level++)
+            {
+                foreach (var req in (stage.Requirements ?? []).Where(r => r.Type == "Item" && !paymentHelper.IsMoneyTpl(r.TemplateId)))
+                {
+                    yield return req.TemplateId;
+                }
+            }
+        }
     }
 
     // Levels past the next one, up to each area's target. They run after the next levels and crafts,
